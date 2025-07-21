@@ -14,7 +14,7 @@
 #include <thread>
 #include <chrono>
 
-std::thread monitor_thread;
+
 void dump_backtrace(){
     const auto MAX_SIZE = 64;
     std::vector<void *> trace(MAX_SIZE);
@@ -44,21 +44,27 @@ void monitor_cache_misses() {
     ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
 }
 void monitor_loop() {
+    fprintf(stderr, "STARTED LOOP");
     while (true) {
-        monitor_cache_misses(); 
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        monitor_cache_misses(); 
+        
     }
 }
-__attribute__((constructor))
-static void on_load() {
-    fprintf(stderr, "[memprofiler] Loaded via LD_PRELOAD\n");
-    // Start background perf monitor
-    monitor_thread = std::thread(monitor_loop);
-}
+std::thread monitor_thread;
+bool thread_started = false;
+// __attribute__((constructor))
+// static void on_load() {
+//     fprintf(stderr, "[memprofiler] Loaded via LD_PRELOAD\n");
+//     // Start background perf monitor
+    
+// }
 extern "C"
 {   
     void* malloc(size_t size)
-    {
+    {   
+        
+        
         static void* original_malloc = dlsym(RTLD_NEXT, "malloc");
         assert(original_malloc);
         auto *original_malloc_fn = reinterpret_cast<decltype(&::malloc)>(original_malloc);
@@ -69,6 +75,12 @@ extern "C"
             return original_malloc_fn(size);
         }
         reentrant = true;
+        if(!thread_started){
+            thread_started = true;
+            monitor_thread = std::thread(monitor_loop);
+            //monitor_thread.join();
+            monitor_thread.detach();
+        }
 
         void *ret = original_malloc_fn(size);        
         dump_backtrace();
@@ -83,7 +95,9 @@ int main() {
     return 0;
 }
 
-__attribute__((destructor))
-static void on_unload() {
-    monitor_thread.join();
-}
+// __attribute__((destructor))
+// static void on_unload() {
+//     fprintf(stderr, "Shutting down"); 
+//     monitor_thread.join();
+//     fprintf(stderr, "Joined");
+// }
