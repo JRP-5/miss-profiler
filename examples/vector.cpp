@@ -18,6 +18,6 @@ int main() {
     for (auto ptr : allocations) {
         delete[] ptr;
     }
-
+    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
     return 0;
 }
