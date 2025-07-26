@@ -35,93 +35,38 @@ std::thread monitor_thread;
 bool thread_started = false;
 bool thread_off = false;
 
-PerfRing setup_perf_event() {
-    struct perf_event_attr pe{};
-    pe.type = PERF_TYPE_HARDWARE;
-    pe.config = PERF_COUNT_HW_CACHE_MISSES;
-    pe.size = sizeof(pe);
-    pe.sample_period = 100000; // lower = more frequent
+constexpr int SAMPLE_FREQ = 10000;
+constexpr size_t MMAP_DATA_SIZE = 1 << 12;  // 4KB
+constexpr size_t MMAP_PAGE_COUNT = 1 + (MMAP_DATA_SIZE / 4096); // 1 metadata + N data
+
+
+int setup_perf_event() {
+    struct perf_event_attr pe;
+    memset(&pe, 0, sizeof(struct perf_event_attr));
+    // pe.type = PERF_TYPE_HARDWARE;
+    pe.size = sizeof(perf_event_attr);
+    // pe.config = PERF_COUNT_HW_CACHE_MISSES;
+    pe.type = PERF_TYPE_RAW;
+    pe.config = 0x01cd; // MEM_LOAD_RETIRED.L1_MISS
     pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
+    pe.freq = 1;
+    pe.sample_freq = SAMPLE_FREQ;
+    pe.precise_ip = 2;
     pe.disabled = 1;
     pe.exclude_kernel = 1;
     pe.exclude_hv = 1;
-    pe.precise_ip = 2;
+    pe.sample_id_all = 1;
     pe.wakeup_events = 1;
 
     int fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
     if (fd == -1) {
-        perror("perf_event_open");
-        std::exit(1);
-    }
-
-    size_t page_size = sysconf(_SC_PAGESIZE);
-    size_t mmap_len = (1 + 8) * page_size; // 1 metadata + 8 pages buffer
-    void* base = mmap(NULL, mmap_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (base == MAP_FAILED) {
-        perror("mmap");
-        std::exit(1);
-    }
-
-    ioctl(fd, PERF_EVENT_IOC_RESET, 0);
-    ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
-
-    return PerfRing{fd, base, mmap_len - page_size};
-}
-void* find_allocation(void* addr) {
-    for (auto& a : allocations) {
-        if (addr >= a.start && addr < static_cast<char*>(a.start) + a.size) {
-            a.total_misses++;
-            return a.start;
-        }
-    }
-    return nullptr;
-}
-int setup_perf_counter() {
-    uint64_t val;
-    struct perf_event_attr  pe;
-
-    // Configure the event to count cache misses
-    std::memset(&pe, 0, sizeof(struct perf_event_attr));
-    pe.type = PERF_COUNT_HW_CACHE_MISSES;
-    pe.size = sizeof(struct perf_event_attr);
-    pe.config = PERF_COUNT_HW_INSTRUCTIONS;
-    pe.disabled = 1;
-
-    int fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
-    if (fd == -1) {
-        std::cerr << "perf_event_open failed: " << strerror(errno) << "\n";
+        std::cerr << "Error opening perf event: " << strerror(errno) << std::endl;
         return -1;
     }
 
-    ioctl(fd, PERF_EVENT_IOC_RESET, 0);
-    ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+  
 
     return fd;
-}
-void monitor_cache_misses(PerfRing ring) {
-    auto* header = (perf_event_mmap_page*)ring.base;
-    char* data = (char*)ring.base + sysconf(_SC_PAGESIZE);
-
-    while (!thread_off) {
-        uint64_t head = __atomic_load_n(&header->data_head, __ATOMIC_ACQUIRE);
-        while (ring.read_head < head) {
-            size_t offset = ring.read_head % ring.buffer_size;
-            struct perf_event_header* eh = (struct perf_event_header*)(data + offset);
-            if (eh->type == PERF_RECORD_SAMPLE) {
-                uint64_t* sample_data = (uint64_t*)(eh + 1);
-                uint64_t ip = *sample_data++;
-                uint64_t addr = *sample_data++;
-
-                void* matched = find_allocation((void*)addr);
-                if (matched) {
-                    fprintf(stderr, "[miss] addr: %p (in alloc: %p)\n", (void*)addr, matched);
-                }
-            }
-            ring.read_head += eh->size;
-        }
-        header->data_tail = ring.read_head;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
 }
 
 void dump_backtrace(){
@@ -134,6 +79,58 @@ void dump_backtrace(){
     }
     
 }
+
+void monitor_cache_misses() {
+    int fd = setup_perf_event();
+    
+    size_t mmap_size = (1 + 8) * 4096; 
+    void* mmap_buf = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mmap_buf == MAP_FAILED) {
+        perror("mmap");
+        close(fd);
+        return;
+    }
+
+    auto* metadata = (perf_event_mmap_page*)mmap_buf;
+    char* data = ((char*)mmap_buf) + 4096;
+
+    ioctl(fd, PERF_EVENT_IOC_RESET, 0);
+    ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+    while (!thread_off) {       
+        uint64_t data_head = metadata->data_head;
+        __sync_synchronize();
+
+        uint64_t data_tail = metadata->data_tail;
+        size_t size = data_head - data_tail;
+        size_t offset = data_tail % (1<<12);
+        size_t bytes_read = 0;
+
+        while (bytes_read < size) {
+            auto* hdr = (perf_event_header*)(data + offset);
+            if (hdr->type == PERF_RECORD_SAMPLE) {
+                uint64_t* sample_data = (uint64_t*)((char*)hdr + sizeof(perf_event_header));
+                uint64_t ip = sample_data[0];
+                uint64_t addr = sample_data[1];
+
+                std::cout << "[Cache Miss] IP= 0x" << std::hex << ip
+                          << "  ADDR= 0x" << addr << std::dec << std::endl;
+            }
+
+            size_t hdr_sz = hdr->size;
+            offset = (offset + hdr_sz) % (1<<12);
+            bytes_read += hdr_sz;
+        }
+
+        metadata->data_tail = data_head;
+        
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+    ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+    munmap(mmap_buf, mmap_size);
+    close(fd);
+}
+
 
 extern "C"
 {   
@@ -151,8 +148,7 @@ extern "C"
         reentrant = true;
         if(!thread_started){
             thread_started = true;
-            PerfRing ring = setup_perf_event();
-            monitor_thread = std::thread(monitor_cache_misses, ring);
+            monitor_thread = std::thread(monitor_cache_misses);
         }
         void *ret = original_malloc_fn(size); 
         // Add the memory region to our list     
