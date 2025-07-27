@@ -2,6 +2,7 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
+#include <cstring>
 
 int main() {
     std::vector<double*> allocations;
@@ -14,6 +15,8 @@ int main() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    void* p = malloc(4096 * 1024);
+    memset(p, 1, 4096 * 1024); 
     double acc = 0;
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     for(auto a: allocations){
@@ -23,6 +26,6 @@ int main() {
         delete[] ptr;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100000));
     return 0;
 }
