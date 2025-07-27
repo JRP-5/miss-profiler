@@ -35,6 +35,8 @@ std::thread monitor_thread;
 bool thread_started = false;
 bool thread_off = false;
 
+
+
 constexpr int SAMPLE_FREQ = 10000;
 constexpr size_t MMAP_DATA_SIZE = 1 << 12;  // 4KB
 constexpr size_t MMAP_PAGE_COUNT = 1 + (MMAP_DATA_SIZE / 4096); // 1 metadata + N data
@@ -79,8 +81,18 @@ void dump_backtrace(){
     }
     
 }
+void* find_malloc_region(uint64_t addr) {
+    for (const auto& a : allocations) {
+        if ((uint64_t)a.start <= addr && addr < (uint64_t)a.start + a.size) {
+            std::cout << "HERE" << std::endl;
+            return a.start;
+        }
+    }
+    return 0;
+}
 
 void monitor_cache_misses() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     int fd = setup_perf_event();
     
     size_t mmap_size = (1 + 8) * 4096; 
@@ -100,20 +112,25 @@ void monitor_cache_misses() {
         uint64_t data_head = metadata->data_head;
         __sync_synchronize();
 
-        uint64_t data_tail = metadata->data_tail;
+        uint64_t data_tail = metadata->data_tail;   
         size_t size = data_head - data_tail;
-        size_t offset = data_tail % (1<<12);
+        size_t offset = data_tail % (1<<12);    
         size_t bytes_read = 0;
 
         while (bytes_read < size) {
+            // std::cout << "HERE" << std::endl;
             auto* hdr = (perf_event_header*)(data + offset);
             if (hdr->type == PERF_RECORD_SAMPLE) {
                 uint64_t* sample_data = (uint64_t*)((char*)hdr + sizeof(perf_event_header));
                 uint64_t ip = sample_data[0];
                 uint64_t addr = sample_data[1];
-
-                std::cout << "[Cache Miss] IP= 0x" << std::hex << ip
-                          << "  ADDR= 0x" << addr << std::dec << std::endl;
+                auto region = find_malloc_region(ip);
+                if(region){
+                    std::cout << "[Cache Miss] IP= 0x" << std::hex << ip << "  ADDR= 0x" << addr << std::dec << "In region= "  << region << std::endl;
+                }
+                else{
+                    std::cout << "[Cache Miss] IP= 0x" << std::hex << ip << "  ADDR= 0x" << addr << std::dec << std::endl;
+                }
             }
 
             size_t hdr_sz = hdr->size;
