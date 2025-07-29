@@ -143,7 +143,11 @@ void monitor_cache_misses() {
                 uint64_t* sample_data = (uint64_t*)((char*)hdr + sizeof(perf_event_header));
                 uint64_t ip = sample_data[0];
                 uint64_t addr = sample_data[1];
+<<<<<<< HEAD
                 auto region = find_malloc_region(addr, ip);
+=======
+                auto region = find_malloc_region(ip);
+>>>>>>> 5df05429f0903b0d198b0b8a0848f92c5c2d11c7
                 if(region){
                     std::cout << "[Cache Miss] IP= 0x" << std::hex << ip << "  ADDR= 0x" << addr << std::dec << "In region= "  << region << std::endl;
                 }
