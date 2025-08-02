@@ -21,6 +21,8 @@
 #include <mutex>
 #include <unistd.h>
 
+#include "symboliser.h"
+
 struct MemoryRegion {
     void* start;
     size_t size;
@@ -37,7 +39,7 @@ std::vector<MemoryRegion> allocations;
 std::thread monitor_thread;
 bool thread_started = false;
 bool thread_off = false;
-
+Symboliser symboliser;
 
 
 constexpr int SAMPLE_FREQ = 10000;
@@ -86,7 +88,11 @@ void dump_backtrace(){
     const auto size = unw_backtrace(trace.data(), MAX_SIZE);
     trace.resize(size);
     for(auto ip: trace){
-        fprintf(stderr, "\tip: %p\n", ip);
+        uint64_t ip_ptr = reinterpret_cast<uint64_t>(ip);
+        Symbol info = symboliser.symbol(ip_ptr);
+        // fprintf(stderr, "%s %d %d\n", info.dso.c_str(), info.line, info.column);
+        // fprintf(stderr, "%s\n", info.dso.c_str());
+        // fprintf(stderr, "\tip: %p\n", ip);
     }
     
 }
@@ -143,11 +149,7 @@ void monitor_cache_misses() {
                 uint64_t* sample_data = (uint64_t*)((char*)hdr + sizeof(perf_event_header));
                 uint64_t ip = sample_data[0];
                 uint64_t addr = sample_data[1];
-<<<<<<< HEAD
                 auto region = find_malloc_region(addr, ip);
-=======
-                auto region = find_malloc_region(ip);
->>>>>>> 5df05429f0903b0d198b0b8a0848f92c5c2d11c7
                 if(region){
                     std::cout << "[Cache Miss] IP= 0x" << std::hex << ip << "  ADDR= 0x" << addr << std::dec << "In region= "  << region << std::endl;
                 }
@@ -174,6 +176,7 @@ extern "C"
 {   
     void* malloc(size_t size)
     {   
+        
         static void* original_malloc = dlsym(RTLD_NEXT, "malloc");
         assert(original_malloc);
         auto *original_malloc_fn = reinterpret_cast<decltype(&::malloc)>(original_malloc);
@@ -192,6 +195,7 @@ extern "C"
         // Add the memory region to our list     
         allocations.push_back({ret, size, 0});
 
+        // Get some information about the malloc call
         dump_backtrace();
         fprintf(stderr, "malloc intercepted: %zu -> %p\n", size, ret);
         reentrant = false;
