@@ -28,15 +28,16 @@ Symboliser::~Symboliser() {
         dwfl_end(m_dwfl);
     }
 }
-void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
-{
+void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
     Dwarf_Addr bias = 0;
+    const char* name = dwfl_module_info(mod, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    fprintf(stderr, "Module name: %s\n", name); 
     auto die = dwfl_module_addrdie(mod, ip, &bias);
     //fprintf(stderr, "IP was: 0x%lx\n", ip);
-    const char* name = dwfl_module_info(mod, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    
     //fprintf(stderr, "Resolved module: %s\n", name);
     if (!die){
-        //fprintf(stderr, "die\n");
+        fprintf(stderr, "die\n");
         return;
     }
     auto srcloc = dwarf_getsrc_die(die, ip - bias);
@@ -80,7 +81,7 @@ Symbol Symboliser::symbol(uint64_t ip) {
         symname = "??";
     symbol.name = symname;
 
-    setFileLineInfo(symbol, mod, ip);
+    setFileLineInfo(symbol, mod, symbol.dso_offset);
 
     return symbol;
 }
