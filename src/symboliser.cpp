@@ -35,7 +35,7 @@ void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
     auto die = dwfl_module_addrdie(mod, ip, &bias);
     //fprintf(stderr, "IP was: 0x%lx\n", ip);
     
-    //fprintf(stderr, "Resolved module: %s\n", name);
+    fprintf(stderr, "Resolved module: %s\n", name);
     if (!die){
         fprintf(stderr, "die\n");
         return;
