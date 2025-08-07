@@ -32,7 +32,11 @@ void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
     Dwarf_Addr bias = 0;
     const char* name = dwfl_module_info(mod, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     fprintf(stderr, "Module name: %s\n", name); 
-    auto die = dwfl_module_addrdie(mod, ip, &bias);
+    Dwarf_Addr module_start = 0;
+    dwfl_module_info(mod, nullptr, &module_start, nullptr, nullptr, nullptr, nullptr, nullptr);
+    fprintf(stderr, "Raw IP: 0x%lx, Module start: 0x%lx\n", ip, module_start);
+    bias = 0;
+    auto die = dwfl_module_addrdie(mod, ip - module_start, &bias);
     //fprintf(stderr, "IP was: 0x%lx\n", ip);
     
     fprintf(stderr, "Resolved module: %s\n", name);
@@ -40,6 +44,7 @@ void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
         fprintf(stderr, "die\n");
         return;
     }
+    fprintf(stderr, "success\n");
     auto srcloc = dwarf_getsrc_die(die, ip - bias);
     if (!srcloc){
         fprintf(stderr, "srclock\n");
@@ -81,7 +86,7 @@ Symbol Symboliser::symbol(uint64_t ip) {
         symname = "??";
     symbol.name = symname;
 
-    setFileLineInfo(symbol, mod, symbol.dso_offset);
+    setFileLineInfo(symbol, mod, ip);
 
     return symbol;
 }
