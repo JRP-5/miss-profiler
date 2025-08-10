@@ -1,13 +1,13 @@
 #include <elfutils/libdwfl.h>
 #include <unistd.h> 
 #include "symboliser.h"
-const Dwfl_Callbacks s_callbacks = {
+char* debug_path = ".:/usr/lib/debug";
+Dwfl_Callbacks s_callbacks = {
     .find_elf = dwfl_build_id_find_elf,
     .find_debuginfo = dwfl_standard_find_debuginfo,
     .section_address = dwfl_offline_section_address,
-    .debuginfo_path = nullptr  // Use default debug info path (e.g. /usr/lib/debug)
+    .debuginfo_path = &debug_path
 };
-
 
 Symboliser::Symboliser() : m_dwfl(dwfl_begin(&s_callbacks)) {
     if (!m_dwfl) {
@@ -28,37 +28,56 @@ Symboliser::~Symboliser() {
         dwfl_end(m_dwfl);
     }
 }
-void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
+namespace {
+//--> slide setDsoInfo
+// 0xDEADBEEF -> libfoo @ 0xBEEF
+void setDsoInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
+{
+    Dwarf_Addr moduleStart = 0;
+    symbol.dso = dwfl_module_info(mod, nullptr, &moduleStart, nullptr,
+                                  nullptr, nullptr, nullptr, nullptr);
+    symbol.dso_offset = ip - moduleStart;
+}
+//<-- slide setDsoInfo
+
+//--> slide setSymInfo
+// 0xDEADBEEF -> foobar @ 0xEF
+void setSymInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
+{
+    GElf_Sym sym;
+    auto symname = dwfl_module_addrinfo(mod, ip, &symbol.offset, &sym,
+                                        nullptr, nullptr, nullptr);
+    if (!symname)
+        symname = "??";
+    symbol.name = symname;
+}
+//<-- slide setSymInfo
+
+//--> slide setFileLineInfo
+// 0xDEADBEEF -> foo.cpp:42
+void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
+{
     Dwarf_Addr bias = 0;
-    const char* name = dwfl_module_info(mod, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
-    fprintf(stderr, "Module name: %s\n", name); 
-    Dwarf_Addr module_start = 0;
-    dwfl_module_info(mod, nullptr, &module_start, nullptr, nullptr, nullptr, nullptr, nullptr);
-    fprintf(stderr, "Raw IP: 0x%lx, Module start: 0x%lx\n", ip, module_start);
-    bias = 0;
-    auto die = dwfl_module_addrdie(mod, ip - module_start, &bias);
-    //fprintf(stderr, "IP was: 0x%lx\n", ip);
-    
-    fprintf(stderr, "Resolved module: %s\n", name);
-    if (!die){
-        fprintf(stderr, "die\n");
+    Dwarf_Addr module_base = 0;
+    dwfl_module_info(mod, nullptr, &module_base, nullptr, nullptr, nullptr, nullptr, nullptr);
+    // fprintf(stderr, "Module Base: 0x%lx\n", module_base);
+    Dwarf_Addr mod_relative_ip = ip - module_base;
+    // fprintf(stderr, "Corrected ip: 0x%lx\n", mod_relative_ip);
+    auto debug_info_entry = dwfl_module_addrdie(mod, ip, &bias);
+    if (!debug_info_entry)
         return;
-    }
-    fprintf(stderr, "success\n");
-    auto srcloc = dwarf_getsrc_die(die, ip - bias);
-    if (!srcloc){
-        fprintf(stderr, "srclock\n");
-        return;
-    }
-    auto srcfile = dwarf_linesrc(srcloc, nullptr, nullptr);
-    if (!srcfile){
-        fprintf(stderr, "srcfile\n");
-        return;
-    }
     fprintf(stderr, "Success\n");
+    auto srcloc = dwarf_getsrc_die(debug_info_entry, ip - bias);
+    if (!srcloc)
+        return;
+    auto srcfile = dwarf_linesrc(srcloc, nullptr, nullptr);
+    if (!srcfile)
+        return;
+
     symbol.file = srcfile;
     dwarf_lineno(srcloc, &symbol.line);
     dwarf_linecol(srcloc, &symbol.column);
+}
 }
 Symbol Symboliser::symbol(uint64_t ip) {
     if (!m_dwfl) {
@@ -72,20 +91,13 @@ Symbol Symboliser::symbol(uint64_t ip) {
                 ip, dwfl_errmsg(dwfl_errno()));
         return {};
     }
-
+    const char* modname = dwfl_module_info(mod, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    // fprintf(stderr, "Resolved module: %s\n", modname);
+    // fprintf(stderr, "Symbolising 0x%zx\n", ip);
     Symbol symbol;
-    Dwarf_Addr moduleStart = 0;
-    symbol.dso = dwfl_module_info(mod, nullptr, &moduleStart, nullptr,
-                                  nullptr, nullptr, nullptr, nullptr);
-    //fprintf(stderr, "Module start: %#010x\n", moduleStart);
-    symbol.dso_offset = ip - moduleStart;
-    GElf_Sym sym;
-    auto symname = dwfl_module_addrinfo(mod, ip, &symbol.offset, &sym,
-                                        nullptr, nullptr, nullptr);
-    if (!symname)
-        symname = "??";
-    symbol.name = symname;
-
+    setDsoInfo(symbol, mod, ip);
+    setSymInfo(symbol, mod, ip);
+    
     setFileLineInfo(symbol, mod, ip);
 
     return symbol;

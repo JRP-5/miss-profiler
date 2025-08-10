@@ -189,7 +189,7 @@ extern "C"
         reentrant = true;
         if(!thread_started){
             thread_started = true;
-            monitor_thread = std::thread(monitor_cache_misses);
+            // monitor_thread = std::thread(monitor_cache_misses);
         }
         void *ret = original_malloc_fn(size); 
         // Add the memory region to our list     
@@ -203,30 +203,30 @@ extern "C"
         return ret;
     }
 }
-extern "C" void* __libc_malloc(size_t size); // fallback if needed
+// extern "C" void* __libc_malloc(size_t size); // fallback if needed
 
-void* operator new(size_t size) {
-    void* ptr = malloc(size); // reuses your existing hook
-    return ptr;
-}
-
-void* operator new[](size_t size) {
-    void* ptr = malloc(size); // reuses your existing hook
-    return ptr;
-}
-
-void operator delete(void* ptr) noexcept {
-    free(ptr); // optional
-}
-
-void operator delete[](void* ptr) noexcept {
-    free(ptr); // optional
-}
-// __attribute__((constructor))
-// static void setup() {
-//     monitor_thread = std::thread(monitor_cache_misses);
-//     thread_started = true;
+// void* operator new(size_t size) {
+//     void* ptr = malloc(size); // reuses your existing hook
+//     return ptr;
 // }
+
+// void* operator new[](size_t size) {
+//     void* ptr = malloc(size); // reuses your existing hook
+//     return ptr;
+// }
+
+// void operator delete(void* ptr) noexcept {
+//     free(ptr); // optional
+// }
+
+// void operator delete[](void* ptr) noexcept {
+//     free(ptr); // optional
+// }
+// // __attribute__((constructor))
+// // static void setup() {
+// //     monitor_thread = std::thread(monitor_cache_misses);
+// //     thread_started = true;
+// // }
 int main() {
     return 0;
 }
