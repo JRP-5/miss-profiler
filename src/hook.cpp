@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <cstdint>
 #include <thread>
+#include <dlfcn.h>      // dladdr
+#include <cxxabi.h>   
 #include <chrono>
 #include <sys/syscall.h>
 #include <linux/perf_event.h>
@@ -120,6 +122,7 @@ void* find_malloc_region(uint64_t addr, uint64_t ip) {
 void monitor_cache_misses() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     int fd = setup_perf_event();
+    return;
     size_t mmap_size = (1 + 8) * 4096; 
     void* mmap_buf = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (mmap_buf == MAP_FAILED) {
@@ -189,7 +192,7 @@ extern "C"
         reentrant = true;
         if(!thread_started){
             thread_started = true;
-            // monitor_thread = std::thread(monitor_cache_misses);
+            monitor_thread = std::thread(monitor_cache_misses);
         }
         void *ret = original_malloc_fn(size); 
         // Add the memory region to our list     

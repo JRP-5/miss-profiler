@@ -1,12 +1,12 @@
 #include <elfutils/libdwfl.h>
 #include <unistd.h> 
 #include "symboliser.h"
-char* debug_path = ".:/usr/lib/debug";
+
 Dwfl_Callbacks s_callbacks = {
     .find_elf = dwfl_build_id_find_elf,
     .find_debuginfo = dwfl_standard_find_debuginfo,
     .section_address = dwfl_offline_section_address,
-    .debuginfo_path = &debug_path
+    .debuginfo_path = nullptr
 };
 
 Symboliser::Symboliser() : m_dwfl(dwfl_begin(&s_callbacks)) {
@@ -60,12 +60,12 @@ void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
     Dwarf_Addr bias = 0;
     Dwarf_Addr module_base = 0;
     dwfl_module_info(mod, nullptr, &module_base, nullptr, nullptr, nullptr, nullptr, nullptr);
-    // fprintf(stderr, "Module Base: 0x%lx\n", module_base);
-    Dwarf_Addr mod_relative_ip = ip - module_base;
-    // fprintf(stderr, "Corrected ip: 0x%lx\n", mod_relative_ip);
+    fprintf(stderr, "Finding ip: 0x%lx\n", ip);
+    fprintf(stderr, "Module Base: 0x%lx\n", module_base);
     auto debug_info_entry = dwfl_module_addrdie(mod, ip, &bias);
-    if (!debug_info_entry)
+    if (!debug_info_entry){
         return;
+    }
     fprintf(stderr, "Success\n");
     auto srcloc = dwarf_getsrc_die(debug_info_entry, ip - bias);
     if (!srcloc)
@@ -97,7 +97,6 @@ Symbol Symboliser::symbol(uint64_t ip) {
     Symbol symbol;
     setDsoInfo(symbol, mod, ip);
     setSymInfo(symbol, mod, ip);
-    
     setFileLineInfo(symbol, mod, ip);
 
     return symbol;

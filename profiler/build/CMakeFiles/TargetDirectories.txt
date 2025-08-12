@@ -1,0 +1,4 @@
+/home/jamie/gitrepos/mem-profiler/profiler/build/CMakeFiles/main.dir
+/home/jamie/gitrepos/mem-profiler/profiler/build/CMakeFiles/vector.dir
+/home/jamie/gitrepos/mem-profiler/profiler/build/CMakeFiles/edit_cache.dir
+/home/jamie/gitrepos/mem-profiler/profiler/build/CMakeFiles/rebuild_cache.dir

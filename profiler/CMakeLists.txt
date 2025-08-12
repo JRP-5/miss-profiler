@@ -5,27 +5,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED On)
 
 # Output locations
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Set build type to Debug to enable -g
 set(CMAKE_BUILD_TYPE Debug)
 
 # Executable
-add_executable(vector
-    examples/vector.cpp
+add_executable(
+    main src/main.cpp
+)
+add_executable(
+    vector examples/vector.cpp
 )
 
-# Shared library
-add_library(hook SHARED
-    src/hook.cpp
-    src/symboliser.cpp
-    src/symboliser.h
-)
-
-# Link dependencies
-target_link_libraries(hook
-    dl 
-    unwind
-    dw
-    elf
-)
