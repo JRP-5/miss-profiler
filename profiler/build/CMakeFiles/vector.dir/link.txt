@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/vector.dir/examples/vector.cpp.o -o bin/vector 
