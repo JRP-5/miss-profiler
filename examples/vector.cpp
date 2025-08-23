@@ -20,7 +20,6 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     void* p = malloc(4096 * 1024);
-    printf("malloc address: %p\n", (void*)__builtin_return_address(0));
     memset(p, 1, 4096 * 1024); 
     double acc = 0;
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -36,6 +35,5 @@ int main() {
 
     std::cout << "Sum = " << v[10] + v[20] << std::endl;
     myfunc();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000000));
     return 0;
 }

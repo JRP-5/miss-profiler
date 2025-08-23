@@ -1,5 +1,7 @@
 #include <elfutils/libdwfl.h>
+#include <elfutils/libdw.h>
 #include <unistd.h> 
+
 #include "symboliser.h"
 
 Dwfl_Callbacks s_callbacks = {
@@ -29,8 +31,7 @@ Symboliser::~Symboliser() {
     }
 }
 namespace {
-//--> slide setDsoInfo
-// 0xDEADBEEF -> libfoo @ 0xBEEF
+
 void setDsoInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
 {
     Dwarf_Addr moduleStart = 0;
@@ -38,10 +39,7 @@ void setDsoInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
                                   nullptr, nullptr, nullptr, nullptr);
     symbol.dso_offset = ip - moduleStart;
 }
-//<-- slide setDsoInfo
 
-//--> slide setSymInfo
-// 0xDEADBEEF -> foobar @ 0xEF
 void setSymInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
 {
     GElf_Sym sym;
@@ -51,23 +49,14 @@ void setSymInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
         symname = "??";
     symbol.name = symname;
 }
-//<-- slide setSymInfo
 
-//--> slide setFileLineInfo
-// 0xDEADBEEF -> foo.cpp:42
 void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
 {
     Dwarf_Addr bias = 0;
-    Dwarf_Addr module_base = 0;
-    dwfl_module_info(mod, nullptr, &module_base, nullptr, nullptr, nullptr, nullptr, nullptr);
-    fprintf(stderr, "Finding ip: 0x%lx\n", ip);
-    fprintf(stderr, "Module Base: 0x%lx\n", module_base);
-    auto debug_info_entry = dwfl_module_addrdie(mod, ip, &bias);
-    if (!debug_info_entry){
+    auto die = dwfl_module_addrdie(mod, ip, &bias);
+    if (!die)
         return;
-    }
-    fprintf(stderr, "Success\n");
-    auto srcloc = dwarf_getsrc_die(debug_info_entry, ip - bias);
+    auto srcloc = dwarf_getsrc_die(die, ip - bias);
     if (!srcloc)
         return;
     auto srcfile = dwarf_linesrc(srcloc, nullptr, nullptr);
@@ -80,24 +69,14 @@ void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
 }
 }
 Symbol Symboliser::symbol(uint64_t ip) {
-    if (!m_dwfl) {
-        fprintf(stderr, "m_dwfl is null in symbol()!\n");
-        return {};
-    }
     auto *mod = dwfl_addrmodule(m_dwfl, ip);
-    
     if (!mod) {
-        fprintf(stderr, "failed to find module for ip %zx: %s\n",
-                ip, dwfl_errmsg(dwfl_errno()));
+        // fprintf(stderr, "failed to find module for ip %zx: %s\n", ip, dwfl_errmsg(dwfl_errno()));
         return {};
     }
-    const char* modname = dwfl_module_info(mod, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
-    // fprintf(stderr, "Resolved module: %s\n", modname);
-    // fprintf(stderr, "Symbolising 0x%zx\n", ip);
     Symbol symbol;
     setDsoInfo(symbol, mod, ip);
     setSymInfo(symbol, mod, ip);
     setFileLineInfo(symbol, mod, ip);
-
     return symbol;
 }
