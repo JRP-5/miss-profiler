@@ -12,8 +12,14 @@
 #include <fstream>
 #include <sstream>
 #include <err.h>
+#include <elfutils/libdwfl.h>
+#include <elfutils/libdw.h>
 
 #include "symboliser.h"
+
+void myfunc() {
+    printf("myfunc address: %p\n", (void*)myfunc);
+}
 
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
                              int cpu, int group_fd, unsigned long flags) {
@@ -91,7 +97,7 @@ int main(int argc, char **argv) {
         perror("execvp failed");
         return 1;
     }
-
+    Symboliser symboliser(child);
     // Parent: wait for /proc/<pid>/maps to appear and capture it (so we can symbolize later)
     std::vector<MapEntry> maps;
     for (int i = 0; i < 200; ++i) {
@@ -134,7 +140,6 @@ int main(int argc, char **argv) {
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
 
-    
     std::vector<Sample> samples; 
     samples.reserve(100000);
     int status = 0;
@@ -144,19 +149,19 @@ int main(int argc, char **argv) {
         // poll-less periodic drain to keep buffer from overflowing but minimal work
         process_samples(metadata, samples, page_size);
         pid_t r = waitpid(child, &status, WNOHANG);
-        if (r) child_running = false;
+        if (r == child) child_running = false;
         else std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
-
+    uint64_t inp;
+    // std::cin >> inp;
     std::cout << "Collection complete\n" << std::endl;
-    Symboliser symboliser;
+    samples.push_back({(uint64_t)(void*)myfunc, (uint64_t)(void*)myfunc});
+    // samples.push_back({inp, inp});
     for(auto a: samples){
         Symbol symbol = symboliser.symbol(a.ip);
-        std::cout << symbol.name << std::endl;
-        // std::cout << std::hex << a.ip << " " << a.addr << std::endl;
     }
     std::cout << samples.size() << std::endl;
     std::cout << "Profiling complete.\n";

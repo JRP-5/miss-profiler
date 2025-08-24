@@ -1,23 +1,23 @@
 #include <elfutils/libdwfl.h>
 #include <elfutils/libdw.h>
 #include <unistd.h> 
+#include <iostream>
 
 #include "symboliser.h"
 
 Dwfl_Callbacks s_callbacks = {
-    .find_elf = dwfl_build_id_find_elf,
+    .find_elf = dwfl_linux_proc_find_elf,
     .find_debuginfo = dwfl_standard_find_debuginfo,
-    .section_address = dwfl_offline_section_address,
     .debuginfo_path = nullptr
 };
 
-Symboliser::Symboliser() : m_dwfl(dwfl_begin(&s_callbacks)) {
+Symboliser::Symboliser(pid_t child_pid) : m_dwfl(dwfl_begin(&s_callbacks)) {
     if (!m_dwfl) {
         fprintf(stderr, "dwfl_begin failed: %s\n", dwfl_errmsg(-1));
         return;
     }
 
-    if (dwfl_linux_proc_report(m_dwfl, getpid()) < 0) {
+    if (dwfl_linux_proc_report(m_dwfl, child_pid) < 0) {
         fprintf(stderr, "dwfl_linux_proc_report failed: %s\n", dwfl_errmsg(-1));
     }
 
@@ -32,16 +32,14 @@ Symboliser::~Symboliser() {
 }
 namespace {
 
-void setDsoInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
-{
+void setDsoInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
     Dwarf_Addr moduleStart = 0;
     symbol.dso = dwfl_module_info(mod, nullptr, &moduleStart, nullptr,
                                   nullptr, nullptr, nullptr, nullptr);
     symbol.dso_offset = ip - moduleStart;
 }
 
-void setSymInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
-{
+void setSymInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
     GElf_Sym sym;
     auto symname = dwfl_module_addrinfo(mod, ip, &symbol.offset, &sym,
                                         nullptr, nullptr, nullptr);
@@ -50,8 +48,7 @@ void setSymInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
     symbol.name = symname;
 }
 
-void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
-{
+void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
     Dwarf_Addr bias = 0;
     auto die = dwfl_module_addrdie(mod, ip, &bias);
     if (!die)
@@ -69,14 +66,37 @@ void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip)
 }
 }
 Symbol Symboliser::symbol(uint64_t ip) {
-    auto *mod = dwfl_addrmodule(m_dwfl, ip);
-    if (!mod) {
-        // fprintf(stderr, "failed to find module for ip %zx: %s\n", ip, dwfl_errmsg(dwfl_errno()));
-        return {};
-    }
     Symbol symbol;
-    setDsoInfo(symbol, mod, ip);
-    setSymInfo(symbol, mod, ip);
-    setFileLineInfo(symbol, mod, ip);
+    Dwfl_Module *mod = dwfl_addrmodule(m_dwfl, ip);
+    if (!mod) {
+        return symbol;
+    }
+
+    // DSO name
+    Dwarf_Addr mod_start = 0;
+    const char* dso_name = dwfl_module_info(mod, nullptr, &mod_start, nullptr,
+                                            nullptr, nullptr, nullptr, nullptr);
+    symbol.dso = dso_name ? dso_name : "??";
+    symbol.dso_offset = ip - mod_start;
+
+    // Function name
+    GElf_Off off;
+    GElf_Sym sym;
+    const char* symname = dwfl_module_addrinfo(mod, ip, &off, &sym, nullptr, nullptr, nullptr);
+    symbol.name = symname ? symname : "??";
+    symbol.offset = off;
+
+    // File/line
+    Dwfl_Line *line = dwfl_module_getsrc(mod, ip);
+    if (line) {
+        int lineno = 0;
+        const char* filename = dwfl_lineinfo(line, nullptr, &lineno, nullptr, nullptr, nullptr);
+        symbol.file = filename ? filename : "??";
+        symbol.line = lineno;
+    }
+    std::cout << "Function: " << symbol.name
+              << " File: " << symbol.file
+              << " Line: " << symbol.line << "\n";
+
     return symbol;
 }

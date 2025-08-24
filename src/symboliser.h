@@ -14,7 +14,7 @@ struct Symbol
 };
 class Symboliser {
 public:
-    Symboliser();
+    Symboliser(pid_t child_pid);
     ~Symboliser();
     Symbol symbol(uint64_t ip);
 private:
