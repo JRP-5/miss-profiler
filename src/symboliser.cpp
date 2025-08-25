@@ -98,6 +98,7 @@ Symbol Symboliser::symbol(uint64_t ip) {
     setDsoInfo(symbol, mod, ip);
     setSymInfo(symbol, mod, ip);
     setFileLineInfo(symbol, mod, ip);
+    fprintf(stderr, "%s %d %d\n", symbol.name.c_str(), symbol.line, symbol.column);
 
     return symbol;
 }

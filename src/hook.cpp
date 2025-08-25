@@ -92,9 +92,6 @@ void dump_backtrace(){
     for(auto ip: trace){
         uint64_t ip_ptr = reinterpret_cast<uint64_t>(ip);
         Symbol info = symboliser.symbol(ip_ptr);
-        // fprintf(stderr, "%s %d %d\n", info.dso.c_str(), info.line, info.column);
-        // fprintf(stderr, "%s\n", info.dso.c_str());
-        // fprintf(stderr, "\tip: %p\n", ip);
     }
     
 }
