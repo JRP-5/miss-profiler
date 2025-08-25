@@ -91,13 +91,14 @@ int main(int argc, char **argv) {
     }
 
     pid_t child = fork();
+    
     if (child == 0) {
         // Child process: execute the target
         execvp(argv[1], &argv[1]);
         perror("execvp failed");
         return 1;
     }
-    Symboliser symboliser(child);
+    
     // Parent: wait for /proc/<pid>/maps to appear and capture it (so we can symbolize later)
     std::vector<MapEntry> maps;
     for (int i = 0; i < 200; ++i) {
@@ -107,7 +108,7 @@ int main(int argc, char **argv) {
     }
     
     if (maps.empty()) std::cerr << "Warning: failed to capture /proc/" << child << "/maps; symbols will be poor\n";      
-
+    Symboliser symboliser(child);
     // Parent process: attach profiler to child
     struct perf_event_attr pe{};
     memset(&pe, 0, sizeof(pe));
@@ -156,10 +157,11 @@ int main(int argc, char **argv) {
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
     uint64_t inp;
-    // std::cin >> inp;
+    std::cin >> inp;
+    samples.push_back({inp, inp});
     std::cout << "Collection complete\n" << std::endl;
     samples.push_back({(uint64_t)(void*)myfunc, (uint64_t)(void*)myfunc});
-    // samples.push_back({inp, inp});
+    
     for(auto a: samples){
         Symbol symbol = symboliser.symbol(a.ip);
     }

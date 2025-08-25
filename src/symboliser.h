@@ -17,6 +17,7 @@ public:
     Symboliser(pid_t child_pid);
     ~Symboliser();
     Symbol symbol(uint64_t ip);
+    std::string demangle(const std::string &symbol) const; 
 private:
     Dwfl *m_dwfl;
 };

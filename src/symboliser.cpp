@@ -2,6 +2,7 @@
 #include <elfutils/libdw.h>
 #include <unistd.h> 
 #include <iostream>
+#include <cxxabi.h>
 
 #include "symboliser.h"
 
@@ -65,6 +66,19 @@ void setFileLineInfo(Symbol &symbol, Dwfl_Module *mod, Dwarf_Addr ip) {
     dwarf_linecol(srcloc, &symbol.column);
 }
 }
+
+std::string Symboliser::demangle(const std::string &symbol) const {
+    if (symbol.size() < 3 || symbol[0] != '_' || symbol[1] != 'Z')
+        return symbol;
+    auto demangled = abi::__cxa_demangle(symbol.c_str(), nullptr,
+                                         nullptr, nullptr);
+    if (!demangled)
+        return symbol;
+    std::string ret = demangled;
+    free(demangled);
+    return ret;
+}
+
 Symbol Symboliser::symbol(uint64_t ip) {
     Symbol symbol;
     Dwfl_Module *mod = dwfl_addrmodule(m_dwfl, ip);
