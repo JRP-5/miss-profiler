@@ -99,15 +99,6 @@ int main(int argc, char **argv) {
         return 1;
     }
     
-    // Parent: wait for /proc/<pid>/maps to appear and capture it (so we can symbolize later)
-    std::vector<MapEntry> maps;
-    for (int i = 0; i < 200; ++i) {
-        maps = attempt_read_proc_maps(child);
-        if (!maps.empty()) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    
-    if (maps.empty()) std::cerr << "Warning: failed to capture /proc/" << child << "/maps; symbols will be poor\n";      
     Symboliser symboliser(child);
     // Parent process: attach profiler to child
     struct perf_event_attr pe{};
@@ -157,8 +148,8 @@ int main(int argc, char **argv) {
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
     uint64_t inp;
-    std::cin >> inp;
-    samples.push_back({inp, inp});
+    // std::cin >> inp;
+    // samples.push_back({inp, inp});
     std::cout << "Collection complete\n" << std::endl;
     samples.push_back({(uint64_t)(void*)myfunc, (uint64_t)(void*)myfunc});
     
