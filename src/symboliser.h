@@ -18,6 +18,6 @@ public:
     ~Symboliser();
     Symbol symbol(uint64_t ip);
     std::string demangle(const std::string &symbol) const; 
-private:
+// private:
     Dwfl *m_dwfl;
 };

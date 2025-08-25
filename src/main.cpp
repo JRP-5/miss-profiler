@@ -83,7 +83,16 @@ static std::vector<MapEntry> attempt_read_proc_maps(pid_t pid){
     }
     return out;
 }
-
+static int module_callback(Dwfl_Module* m, void** /*userdata*/, const char* name,
+                           Dwarf_Addr low, void* /*arg*/) {
+    Dwarf_Addr start = 0;
+    const char* path = dwfl_module_info(m, nullptr, &start, nullptr,
+                                        nullptr, nullptr, nullptr, nullptr);
+    std::cerr << "[DWFL] " << (name ? name : "(anon)") << " -> "
+              << (path ? path : "(no-path)")
+              << " @ 0x" << std::hex << start << std::dec << "\n";
+    return DWARF_CB_OK;
+}
 int main(int argc, char **argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <program> [args...]\n";

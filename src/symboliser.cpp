@@ -25,6 +25,7 @@ Symboliser::Symboliser(pid_t child_pid) : m_dwfl(dwfl_begin(&s_callbacks)) {
     if (dwfl_report_end(m_dwfl, nullptr, nullptr) != 0) {
         fprintf(stderr, "dwfl_report_end failed: %s\n", dwfl_errmsg(-1));
     }
+    
 }
 Symboliser::~Symboliser() {
     if (m_dwfl) {
@@ -108,9 +109,9 @@ Symbol Symboliser::symbol(uint64_t ip) {
         symbol.file = filename ? filename : "??";
         symbol.line = lineno;
     }
-    std::cout << "Function: " << symbol.name
+    std::cout << "Function: " << demangle(symbol.name)
               << " File: " << symbol.file
-              << " Line: " << symbol.line << "\n";
+              << ":" << symbol.line << "\n";
 
     return symbol;
 }
