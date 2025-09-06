@@ -14,6 +14,10 @@
 #include <err.h>
 #include <elfutils/libdwfl.h>
 #include <elfutils/libdw.h>
+#include <sys/ptrace.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <errno.h>
 
 #include "symboliser.h"
 
@@ -39,6 +43,42 @@ uint64_t start, end;
 // uint64_t inode{};
 // std::string path; // may be empty
 };
+
+static void wait_exec_stop(pid_t pid) {
+    // Attach without stopping threads immediately; request exec stops.
+    if (ptrace(PTRACE_SEIZE, pid, 0, PTRACE_O_TRACEEXEC | PTRACE_O_TRACESYSGOOD) == -1) {
+        perror("PTRACE_SEIZE");
+        exit(1);
+    }
+    // Stop the tracee so we control its run-to-exec.
+    if (kill(pid, SIGSTOP) == -1) {
+        perror("kill(SIGSTOP)");
+        exit(1);
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid) { perror("waitpid initial"); exit(1); }
+
+    // Let it run until the exec boundary.
+    if (ptrace(PTRACE_CONT, pid, 0, 0) == -1) { perror("PTRACE_CONT"); exit(1); }
+
+    for (;;) {
+        if (waitpid(pid, &status, 0) != pid) { perror("waitpid loop"); exit(1); }
+        if (WIFSTOPPED(status)) {
+            int sig = WSTOPSIG(status);
+            if (sig == SIGTRAP) {
+                unsigned long event = 0;
+                if (ptrace(PTRACE_GETEVENTMSG, pid, 0, &event) == -1) event = 0;
+                // SIGTRAP with EXEC event means we're at exec stop.
+                if ((status >> 16) == PTRACE_EVENT_EXEC) break;
+            }
+            // Pass other stops through.
+            if (ptrace(PTRACE_CONT, pid, 0, 0) == -1) { perror("PTRACE_CONT"); exit(1); }
+        } else if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            fprintf(stderr, "Child exited before exec\n");
+            exit(1);
+        }
+    }
+}
 
 static void process_samples(perf_event_mmap_page* metadata, std::vector<Sample>& samples, size_t page_size ){
     uint64_t data_size = page_size * 8;
@@ -100,24 +140,22 @@ int main(int argc, char **argv) {
     }
 
     pid_t child = fork();
-    
     if (child == 0) {
         // Child process: execute the target
         execvp(argv[1], &argv[1]);
         perror("execvp failed");
-        return 1;
+        _exit(1);
     }
-    
-    Symboliser symboliser(child);
+    wait_exec_stop(child);                  // ← deterministic exec boundary
+    Symboliser symboliser(child);           // ← DWFL snapshot here (post-exec)
+    ptrace(PTRACE_DETACH, child, 0, 0);  
+    // Symboliser symboliser(child);
     // Parent process: attach profiler to child
     struct perf_event_attr pe{};
     memset(&pe, 0, sizeof(pe));
     pe.type = PERF_TYPE_HW_CACHE;
     pe.size = sizeof(pe);
     pe.config = PERF_COUNT_HW_CACHE_MISSES;
-    // pe.config = (PERF_COUNT_HW_CACHE_LL) |
-    //             (PERF_COUNT_HW_CACHE_OP_READ << 8) |
-    //             (PERF_COUNT_HW_CACHE_RESULT_MISS << 16);
     pe.sample_period = 1000; // adjust for sampling rate
     pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
     pe.disabled = 1;
