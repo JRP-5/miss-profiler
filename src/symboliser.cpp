@@ -99,6 +99,7 @@ Symbol Symboliser::symbol(uint64_t ip) {
     GElf_Sym sym;
     const char* symname = dwfl_module_addrinfo(mod, ip, &off, &sym, nullptr, nullptr, nullptr);
     symbol.name = symname ? symname : "??";
+    symbol.name = demangle(symbol.name);
     symbol.offset = off;
 
     // File/line
@@ -109,9 +110,6 @@ Symbol Symboliser::symbol(uint64_t ip) {
         symbol.file = filename ? filename : "??";
         symbol.line = lineno;
     }
-    std::cout << "Function: " << demangle(symbol.name)
-              << " File: " << symbol.file
-              << ":" << symbol.line << "\n";
 
     return symbol;
 }

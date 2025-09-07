@@ -9,6 +9,7 @@
 #include <vector>
 #include <cstdint>
 #include <thread>
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -109,6 +110,33 @@ static int module_callback(Dwfl_Module* m, void** /*userdata*/, const char* name
               << " @ 0x" << std::hex << start << std::dec << "\n";
     return DWARF_CB_OK;
 }
+static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, Symboliser symboliser) {
+    // Addr, total count, (ip, count) 
+    std::vector<std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>>> addr_counts;
+    for(auto inner_map : samples){
+        std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> output = {inner_map.first, 0, {}};
+        for(auto entry : inner_map.second){
+            std::get<1>(output) += entry.second;
+            std::get<2>(output).push_back(std::make_pair(entry.first, entry.second));
+        }
+        std::sort(std::get<2>(output).begin(), std::get<2>(output).end(), [](std::pair<uint64_t, uint64_t> a, std::pair<uint64_t, uint64_t> b) {
+            return a.second > b.second;
+        });
+        addr_counts.push_back(output);
+    }
+    std::sort(addr_counts.begin(), addr_counts.end(), [](std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> a, std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> b) {
+        return std::get<1>(a) > std::get<1>(b);
+    });
+    for(auto& addr_entry: addr_counts){
+        if(std::get<1>(addr_entry) <= 1) continue;
+        std::cout << "Address 0x" << std::hex << std::get<0>(addr_entry) << " total " << std::dec << std::get<1>(addr_entry) << " miss(es)\n";
+        for(auto& ip_entry: std::get<2>(addr_entry)){
+            Symbol symbol = symboliser.symbol(ip_entry.first);
+             std::cout << "\tIP 0x" << std::hex << ip_entry.first
+                      << " : " << std::dec << ip_entry.second << " misses\n\tFunction: " << symbol.name << "\n\tFile: " << symbol.file << ":" << symbol.line << ":" << symbol.column <<  std::endl;
+        }
+    }
+}
 int main(int argc, char **argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <program> [args...]\n";
@@ -174,11 +202,13 @@ int main(int argc, char **argv) {
 
     std::cout << "Collection complete\n" << std::endl;
     
+    // TODO possibly move symboliser in process_samples?
     for(auto& inner_map : samples){
         for(auto entry : inner_map.second){
             Symbol symbol = symboliser.symbol(entry.first);
         }
     }
+    print_results(samples, symboliser);
     std::cout << samples.size() << std::endl;
     std::cout << "Profiling complete.\n";
     return 0;
