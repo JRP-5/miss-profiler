@@ -82,8 +82,8 @@ static void process_samples(perf_event_mmap_page* metadata, std::unordered_map<u
 
 }
 
-static int module_callback(Dwfl_Module* m, void** /*userdata*/, const char* name,
-                           Dwarf_Addr low, void* /*arg*/) {
+static int module_callback(Dwfl_Module* m, void**, const char* name,
+                           Dwarf_Addr low, void* ) {
     Dwarf_Addr start = 0;
     const char* path = dwfl_module_info(m, nullptr, &start, nullptr,
                                         nullptr, nullptr, nullptr, nullptr);
@@ -144,11 +144,9 @@ int main(int argc, char **argv) {
     pe.sample_period = 1000; // adjust for sampling rate
     pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
     pe.disabled = 1;
-    pe.exclude_kernel = 0;
-    pe.exclude_hv = 0;
+    pe.exclude_kernel = 1;
+    pe.exclude_hv = 1;
     pe.precise_ip = 2;
-    pe.inherit = 1;
-    pe.inherit_stat = 1;
     
     int fd = perf_event_open(&pe, child, -1, -1, 0);    
     if (fd == -1) {

@@ -19,6 +19,9 @@ add_executable(
 add_executable(
     vector examples/vector.cpp
 )
+add_executable(
+    multithread examples/multithread.cpp
+)
 
 target_link_libraries(main
     dl 
