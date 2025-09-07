@@ -11,6 +11,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 #include <err.h>
 #include <elfutils/libdwfl.h>
 #include <elfutils/libdw.h>
@@ -31,7 +32,7 @@ static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
 }
 
 struct Sample {
-    uint64_t ip;
+    uint64_t count;
     uint64_t addr;
 };
 
@@ -80,7 +81,7 @@ static void wait_exec_stop(pid_t pid) {
     }
 }
 
-static void process_samples(perf_event_mmap_page* metadata, std::vector<Sample>& samples, size_t page_size ){
+static void process_samples(perf_event_mmap_page* metadata, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, size_t page_size ){
     uint64_t data_size = page_size * 8;
     uint64_t head = metadata->data_head;
     uint64_t tail = metadata->data_tail;
@@ -90,34 +91,14 @@ static void process_samples(perf_event_mmap_page* metadata, std::vector<Sample>&
         perf_event_header *event_hdr = (perf_event_header *)(data + (tail % data_size));
         if (event_hdr->type == PERF_RECORD_SAMPLE) {
             uint64_t* sample_data = (uint64_t*)((char*)event_hdr + sizeof(perf_event_header));
-            Sample s;
-            s.ip = sample_data[0];
-            s.addr = sample_data[1];
-            samples.push_back(s);
+            samples[sample_data[1]][sample_data[0]]++;
         }
         tail += event_hdr->size;
     }
     metadata->data_tail = tail;
 
 }
-static std::vector<MapEntry> attempt_read_proc_maps(pid_t pid){
-    std::vector<MapEntry> out;
-    std::string p = "/proc/" + std::to_string(pid) + "/maps";
-    std::ifstream inFile(p);
-    if (!inFile) return out;
-    std::string line;
-    while (std::getline(inFile, line)) {
-        MapEntry e{};
-        std::string addr;
-        std::istringstream iss(line);
-        iss >> addr;
-        size_t dash = addr.find('-');
-        e.start = std::strtoull(addr.substr(0, dash).c_str(), nullptr, 16);
-        e.end = std::strtoull(addr.substr(dash+1).c_str(), nullptr, 16);
-        out.push_back(std::move(e));
-    }
-    return out;
-}
+
 static int module_callback(Dwfl_Module* m, void** /*userdata*/, const char* name,
                            Dwarf_Addr low, void* /*arg*/) {
     Dwarf_Addr start = 0;
@@ -172,9 +153,10 @@ int main(int argc, char **argv) {
         err(EXIT_FAILURE, "PERF_EVENT_IOC_RESET");
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
-
-    std::vector<Sample> samples; 
-    samples.reserve(100000);
+    
+    // addr, (ip, count)
+    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> samples; 
+    // samples.reserve(100000);
     int status = 0;
     bool child_running = true;
     
@@ -191,10 +173,11 @@ int main(int argc, char **argv) {
     uint64_t inp;
 
     std::cout << "Collection complete\n" << std::endl;
-    samples.push_back({(uint64_t)(void*)myfunc, (uint64_t)(void*)myfunc});
     
-    for(auto a: samples){
-        Symbol symbol = symboliser.symbol(a.ip);
+    for(auto& inner_map : samples){
+        for(auto entry : inner_map.second){
+            Symbol symbol = symboliser.symbol(entry.first);
+        }
     }
     std::cout << samples.size() << std::endl;
     std::cout << "Profiling complete.\n";
