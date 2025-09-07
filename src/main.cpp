@@ -23,28 +23,10 @@
 
 #include "symboliser.h"
 
-void myfunc() {
-    printf("myfunc address: %p\n", (void*)myfunc);
-}
-
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
                              int cpu, int group_fd, unsigned long flags) {
     return syscall(__NR_perf_event_open, hw_event, pid, cpu, group_fd, flags);
 }
-
-struct Sample {
-    uint64_t count;
-    uint64_t addr;
-};
-
-// Stores an entry from the relevant /proc/<pid>/maps
-struct MapEntry {
-uint64_t start, end;
-// std::string perms;
-// std::string dev;
-// uint64_t inode{};
-// std::string path; // may be empty
-};
 
 static void wait_exec_stop(pid_t pid) {
     // Attach without stopping threads immediately; request exec stops.
@@ -162,9 +144,11 @@ int main(int argc, char **argv) {
     pe.sample_period = 1000; // adjust for sampling rate
     pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
     pe.disabled = 1;
-    pe.exclude_kernel = 1;
-    pe.exclude_hv = 1;
+    pe.exclude_kernel = 0;
+    pe.exclude_hv = 0;
     pe.precise_ip = 2;
+    pe.inherit = 1;
+    pe.inherit_stat = 1;
     
     int fd = perf_event_open(&pe, child, -1, -1, 0);    
     if (fd == -1) {
