@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <sched.h>
 
 #include "symboliser.h"
 
@@ -44,7 +45,6 @@ static void wait_exec_stop(pid_t pid) {
 
     // Let it run until the exec boundary.
     if (ptrace(PTRACE_CONT, pid, 0, 0) == -1) { perror("PTRACE_CONT"); exit(1); }
-
     for (;;) {
         if (waitpid(pid, &status, 0) != pid) { perror("waitpid loop"); exit(1); }
         if (WIFSTOPPED(status)) {
@@ -62,6 +62,15 @@ static void wait_exec_stop(pid_t pid) {
             exit(1);
         }
     }
+    if (ptrace(PTRACE_SETOPTIONS, pid, 0,
+        // PTRACE_O_TRACECLONE |  // new threads
+        // PTRACE_O_TRACEFORK  |  // fork()
+        // PTRACE_O_TRACEVFORK |  // vfork()
+        PTRACE_O_EXITKILL) == -1){ // task exit
+        perror("PTRACE_SETOPTIONS");
+        exit(1);
+    }    
+    // std::cout << "HERE\n";
 }
 
 static void process_samples(perf_event_mmap_page* metadata, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, size_t page_size ){
@@ -82,6 +91,20 @@ static void process_samples(perf_event_mmap_page* metadata, std::unordered_map<u
 
 }
 
+static void track_thread(unsigned long tid, struct perf_event_attr& pe) {
+    int fd = perf_event_open(&pe, tid, -1, -1, 0);    
+    if (fd == -1) {
+        perror("child perf_event_open");
+    }
+    size_t page_size = sysconf(_SC_PAGESIZE);
+    size_t mmap_size = (1 + (1 << 8)) * page_size;
+    // TODO, does this run out of space?
+    void *mmap_base = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mmap_base == MAP_FAILED) {
+        perror("mmap");
+        close(fd);
+    }
+}
 static int module_callback(Dwfl_Module* m, void**, const char* name,
                            Dwarf_Addr low, void* ) {
     Dwarf_Addr start = 0;
@@ -92,7 +115,7 @@ static int module_callback(Dwfl_Module* m, void**, const char* name,
               << " @ 0x" << std::hex << start << std::dec << "\n";
     return DWARF_CB_OK;
 }
-static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, Symboliser symboliser) {
+static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, Symboliser& symboliser) {
     // Addr, total count, (ip, count) 
     std::vector<std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>>> addr_counts;
     for(auto inner_map : samples){
@@ -111,7 +134,7 @@ static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64
     });
     for(auto& addr_entry: addr_counts){
         if(std::get<1>(addr_entry) <= 1) continue;
-        std::cout << "Address 0x" << std::hex << std::get<0>(addr_entry) << " total " << std::dec << std::get<1>(addr_entry) << " miss(es)\n";
+        std::cout << "Address 0x" << std::hex << std::get<0>(addr_entry) << " total " << std::dec << std::get<1>(addr_entry) << " misses\n";
         for(auto& ip_entry: std::get<2>(addr_entry)){
             Symbol symbol = symboliser.symbol(ip_entry.first);
              std::cout << "\tIP 0x" << std::hex << ip_entry.first
@@ -124,7 +147,6 @@ int main(int argc, char **argv) {
         std::cerr << "Usage: " << argv[0] << " <program> [args...]\n";
         return 1;
     }
-
     pid_t child = fork();
     if (child == 0) {
         // Child process: execute the target
@@ -155,8 +177,14 @@ int main(int argc, char **argv) {
     }
 
     size_t page_size = sysconf(_SC_PAGESIZE);
-    size_t mmap_size = (1 + 8) * page_size;
+    size_t mmap_size = (1 + (1 << 8)) * page_size;
+    // TODO, does this run out of space?
     void *mmap_base = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mmap_base == MAP_FAILED) {
+        perror("mmap");
+        close(fd);
+        return 1;
+    }
     struct perf_event_mmap_page *metadata = (perf_event_mmap_page*) mmap_base;
 
     if (ioctl(fd, PERF_EVENT_IOC_RESET, 0) == -1)
@@ -166,7 +194,6 @@ int main(int argc, char **argv) {
     
     // addr, (ip, count)
     std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> samples; 
-    // samples.reserve(100000);
     int status = 0;
     bool child_running = true;
     
@@ -176,20 +203,19 @@ int main(int argc, char **argv) {
         pid_t r = waitpid(child, &status, WNOHANG);
         if (r == child) child_running = false;
         else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // If our process has spawned a new thread we should also track it
+        if (status >> 16 == PTRACE_EVENT_CLONE) {
+            unsigned long new_tid;
+            ptrace(PTRACE_GETEVENTMSG, child, 0, &new_tid);
+        }
+        
     }
     
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
-    uint64_t inp;
 
     std::cout << "Collection complete\n" << std::endl;
     
-    // TODO possibly move symboliser in process_samples?
-    for(auto& inner_map : samples){
-        for(auto entry : inner_map.second){
-            Symbol symbol = symboliser.symbol(entry.first);
-        }
-    }
     print_results(samples, symboliser);
     std::cout << samples.size() << std::endl;
     std::cout << "Profiling complete.\n";

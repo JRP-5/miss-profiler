@@ -25,7 +25,7 @@ int main() {
     const int incrementsPerThread = 100000;
     
     std::vector<std::thread> threads;
-
+    increment(incrementsPerThread);
     // start some threads
     for (int i = 0; i < numThreads; i++) {
         threads.emplace_back(increment, incrementsPerThread);
