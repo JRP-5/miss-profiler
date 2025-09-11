@@ -21,11 +21,11 @@ void increment(int times) {
 }
 
 int main() {
-    const int numThreads = 4;
+    const int numThreads = 6;
     const int incrementsPerThread = 100000;
     
     std::vector<std::thread> threads;
-    increment(incrementsPerThread);
+    // increment(incrementsPerThread);
     // start some threads
     for (int i = 0; i < numThreads; i++) {
         threads.emplace_back(increment, incrementsPerThread);

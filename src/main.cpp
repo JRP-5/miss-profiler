@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <sched.h>
+#include <map>
 
 #include "symboliser.h"
 
@@ -63,14 +64,13 @@ static void wait_exec_stop(pid_t pid) {
         }
     }
     if (ptrace(PTRACE_SETOPTIONS, pid, 0,
-        // PTRACE_O_TRACECLONE |  // new threads
-        // PTRACE_O_TRACEFORK  |  // fork()
-        // PTRACE_O_TRACEVFORK |  // vfork()
+        PTRACE_O_TRACECLONE |  // new threads
+        PTRACE_O_TRACEFORK  |  // fork()
+        PTRACE_O_TRACEVFORK |  // vfork()
         PTRACE_O_EXITKILL) == -1){ // task exit
         perror("PTRACE_SETOPTIONS");
         exit(1);
     }    
-    // std::cout << "HERE\n";
 }
 
 static void process_samples(perf_event_mmap_page* metadata, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, size_t page_size ){
@@ -91,10 +91,10 @@ static void process_samples(perf_event_mmap_page* metadata, std::unordered_map<u
 
 }
 
-static void track_thread(unsigned long tid, struct perf_event_attr& pe) {
+static struct perf_event_mmap_page* track_thread(unsigned long tid, struct perf_event_attr& pe) {
     int fd = perf_event_open(&pe, tid, -1, -1, 0);    
     if (fd == -1) {
-        perror("child perf_event_open");
+        perror("thread perf_event_open");
     }
     size_t page_size = sysconf(_SC_PAGESIZE);
     size_t mmap_size = (1 + (1 << 8)) * page_size;
@@ -104,6 +104,11 @@ static void track_thread(unsigned long tid, struct perf_event_attr& pe) {
         perror("mmap");
         close(fd);
     }
+    if (ioctl(fd, PERF_EVENT_IOC_RESET, 0) == -1)
+        err(EXIT_FAILURE, "PERF_EVENT_IOC_RESET");
+    if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
+        err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
+    return (perf_event_mmap_page*) mmap_base;
 }
 static int module_callback(Dwfl_Module* m, void**, const char* name,
                            Dwarf_Addr low, void* ) {
@@ -157,7 +162,7 @@ int main(int argc, char **argv) {
     wait_exec_stop(child);                 
     Symboliser symboliser(child);           
     // Let the child continue
-    ptrace(PTRACE_DETACH, child, 0, 0);  
+    ptrace(PTRACE_CONT, child, 0, 0);  
     struct perf_event_attr pe{};
     memset(&pe, 0, sizeof(pe));
     pe.type = PERF_TYPE_HW_CACHE;
@@ -193,30 +198,51 @@ int main(int argc, char **argv) {
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     
     // addr, (ip, count)
-    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> samples; 
+    std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>> samples(1); 
+    std::vector<struct perf_event_mmap_page*> maps = {metadata};
     int status = 0;
-    bool child_running = true;
     
-    while (child_running) {
+    while (true) {
         // poll-less periodic drain to keep buffer from overflowing but minimal work
-        process_samples(metadata, samples, page_size);
-        pid_t r = waitpid(child, &status, WNOHANG);
-        if (r == child) child_running = false;
-        else std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        // If our process has spawned a new thread we should also track it
-        if (status >> 16 == PTRACE_EVENT_CLONE) {
-            unsigned long new_tid;
-            ptrace(PTRACE_GETEVENTMSG, child, 0, &new_tid);
+        for(int i = 0; i < samples.size(); i++){
+            process_samples(maps[i], samples[i], page_size);
         }
-        
+        // Look at all threads/children
+        pid_t r = waitpid(-1, &status, __WALL | WNOHANG);
+        if (r == -1) {
+        if (errno == EINTR) continue;
+            perror("waitpid");
+            break;
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            continue;
+        }
+        // If our process has spawned a new thread we should also track it
+        if (r > 0 && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
+            unsigned int event = status >> 16;
+            if (event == PTRACE_EVENT_CLONE) {
+                unsigned long new_tid;
+                ptrace(PTRACE_GETEVENTMSG, child, 0, &new_tid);
+                struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
+                maps.push_back(mmap);
+                samples.push_back({});
+                // ptrace(PTRACE_CONT, r, 0, 0);
+                // ptrace(PTRACE_CONT, new_tid, 0, 0);
+            }
+        }
+        ptrace(PTRACE_CONT, r, 0, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
 
     std::cout << "Collection complete\n" << std::endl;
+    for(auto entry : samples){
+        print_results(entry, symboliser);
+    }
     
-    print_results(samples, symboliser);
     std::cout << samples.size() << std::endl;
     std::cout << "Profiling complete.\n";
     return 0;
