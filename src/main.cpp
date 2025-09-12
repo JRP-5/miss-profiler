@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <cstdint>
 #include <thread>
@@ -137,14 +138,21 @@ static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64
     std::sort(addr_counts.begin(), addr_counts.end(), [](std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> a, std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> b) {
         return std::get<1>(a) > std::get<1>(b);
     });
+    std::cout << "Address\t\t Instruction\t\t Cache Misses\t File\n";
+    std::cout << "---------------------------------------------------------------\n";
     for(auto& addr_entry: addr_counts){
+        // Ignore smaller ones
         if(std::get<1>(addr_entry) <= 1) continue;
-        std::cout << "Address 0x" << std::hex << std::get<0>(addr_entry) << " total " << std::dec << std::get<1>(addr_entry) << " misses\n";
+        std::cout << std::left << std::setw(41) << std::hex << std::showbase <<  std::get<0>(addr_entry)  << std::left 
+        << std::setw(29) << std::dec << std::get<1>(addr_entry) << "\n";
+        // std::cout << "Address 0x" << std::hex << std::get<0>(addr_entry) << " total " << std::dec <<  << " misses\n";
         for(auto& ip_entry: std::get<2>(addr_entry)){
             Symbol symbol = symboliser.symbol(ip_entry.first);
-             std::cout << "\tIP 0x" << std::hex << ip_entry.first
-                      << " : " << std::dec << ip_entry.second << " misses\n\tFunction: " << symbol.name << "\n\tFile: " << symbol.file << ":" << symbol.line << ":" << symbol.column <<  std::endl;
+            std::cout << std::left << std::setw(17) << "" << std::left << std::setw(24) << std::hex
+             << std::showbase << ip_entry.first << std::left << std::setw(16) << std::dec 
+             << ip_entry.second << std::setw(16)  << symbol.file << ":" << symbol.line << ":" << symbol.column <<  std::endl;
         }
+        std::cout << std::endl;
     }
 }
 int main(int argc, char **argv) {
@@ -222,7 +230,6 @@ int main(int argc, char **argv) {
         if (r > 0 && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
             unsigned int event = status >> 16;
             if (event == PTRACE_EVENT_CLONE) {
-                std::cout << "NEW thread\n";
                 unsigned long new_tid;
                 ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
                 struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
