@@ -19,13 +19,11 @@ void increment(int times) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
-
-int main() {
-    const int numThreads = 6;
+void spawn_threads() {
+    const int numThreads = 4;
     const int incrementsPerThread = 100000;
     
     std::vector<std::thread> threads;
-    // increment(incrementsPerThread);
     // start some threads
     for (int i = 0; i < numThreads; i++) {
         threads.emplace_back(increment, incrementsPerThread);
@@ -35,7 +33,11 @@ int main() {
     for (auto& t : threads) {
         t.join();
     }
-
+}
+int main() {
+    std::thread th(spawn_threads);
+    th.join();
+    // spawn_threads();
     std::cout << "Final counter value: " << counter.load() << "\n";
 
     return 0;

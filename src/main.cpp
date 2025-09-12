@@ -46,7 +46,7 @@ static void wait_exec_stop(pid_t pid) {
 
     // Let it run until the exec boundary.
     if (ptrace(PTRACE_CONT, pid, 0, 0) == -1) { perror("PTRACE_CONT"); exit(1); }
-    for (;;) {
+    while (true) {
         if (waitpid(pid, &status, 0) != pid) { perror("waitpid loop"); exit(1); }
         if (WIFSTOPPED(status)) {
             int sig = WSTOPSIG(status);
@@ -210,7 +210,7 @@ int main(int argc, char **argv) {
         // Look at all threads/children
         pid_t r = waitpid(-1, &status, __WALL | WNOHANG);
         if (r == -1) {
-        if (errno == EINTR) continue;
+            if (errno == EINTR) continue;
             perror("waitpid");
             break;
         }
@@ -222,13 +222,12 @@ int main(int argc, char **argv) {
         if (r > 0 && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
             unsigned int event = status >> 16;
             if (event == PTRACE_EVENT_CLONE) {
+                std::cout << "NEW thread\n";
                 unsigned long new_tid;
-                ptrace(PTRACE_GETEVENTMSG, child, 0, &new_tid);
+                ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
                 struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
                 maps.push_back(mmap);
                 samples.push_back({});
-                // ptrace(PTRACE_CONT, r, 0, 0);
-                // ptrace(PTRACE_CONT, new_tid, 0, 0);
             }
         }
         ptrace(PTRACE_CONT, r, 0, 0);
@@ -241,6 +240,7 @@ int main(int argc, char **argv) {
     std::cout << "Collection complete\n" << std::endl;
     for(auto entry : samples){
         print_results(entry, symboliser);
+        std::cout << entry.size() << std::endl;
     }
     
     std::cout << samples.size() << std::endl;
