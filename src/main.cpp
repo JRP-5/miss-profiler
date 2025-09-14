@@ -121,10 +121,19 @@ static int module_callback(Dwfl_Module* m, void**, const char* name,
               << " @ 0x" << std::hex << start << std::dec << "\n";
     return DWARF_CB_OK;
 }
-static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, Symboliser& symboliser) {
-    // Addr, total count, (ip, count) 
+static void print_results(std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>>& samples, Symboliser& symboliser) {
+    // addr, (ip, count)
+    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> merged;
+    for(auto sample :samples) {
+        for(auto inner_map : sample) {
+            for(auto entry : inner_map.second) {
+                merged[inner_map.first][entry.first] += entry.second;
+            }
+        }
+    }
+    // Addr, total count, (ip, count)
     std::vector<std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>>> addr_counts;
-    for(auto inner_map : samples){
+    for(auto inner_map : merged){
         std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> output = {inner_map.first, 0, {}};
         for(auto entry : inner_map.second){
             std::get<1>(output) += entry.second;
@@ -205,7 +214,7 @@ int main(int argc, char **argv) {
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     
-    // addr, (ip, count)
+    
     std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>> samples(1); 
     std::vector<struct perf_event_mmap_page*> maps = {metadata};
     int status = 0;
@@ -245,10 +254,7 @@ int main(int argc, char **argv) {
     close(fd);
 
     std::cout << "Collection complete\n" << std::endl;
-    for(auto entry : samples){
-        print_results(entry, symboliser);
-        std::cout << entry.size() << std::endl;
-    }
+    print_results(samples, symboliser);
     
     std::cout << samples.size() << std::endl;
     std::cout << "Profiling complete.\n";
