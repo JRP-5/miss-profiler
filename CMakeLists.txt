@@ -9,6 +9,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Set build type to Debug to enable -g
 set(CMAKE_BUILD_TYPE Debug)
 
+include(FetchContent)
+# Fetch moodycamel concurrentqueue
+FetchContent_Declare(
+    concurrentqueue
+    GIT_REPOSITORY https://github.com/cameron314/concurrentqueue.git
+    GIT_TAG        master 
+)
+FetchContent_MakeAvailable(concurrentqueue)
+
 # Executable
 add_executable(
     main 
@@ -21,6 +30,10 @@ add_executable(
 )
 add_executable(
     multithread examples/multithread.cpp
+)
+
+target_include_directories(main PRIVATE
+    ${concurrentqueue_SOURCE_DIR}
 )
 
 target_link_libraries(main

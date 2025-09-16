@@ -15,6 +15,7 @@
 #include <sstream>
 #include <atomic>
 #include <mutex>
+#include "concurrentqueue.h"
 #include <unordered_map>
 #include <err.h>
 #include <elfutils/libdwfl.h>
@@ -28,7 +29,12 @@
 
 #include "symboliser.h"
 
-std::atomic<bool> stop_draining{false};
+std::atomic<bool> stop_threading{false};
+
+struct sample {
+    uint64_t address;
+    uint64_t ip;
+};
 
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
                              int cpu, int group_fd, unsigned long flags) {
@@ -78,11 +84,17 @@ static void wait_exec_stop(pid_t pid) {
     }    
 }
 
-static bool process_samples(perf_event_mmap_page* metadata, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, size_t page_size ){
+static bool drain_samples(perf_event_mmap_page* metadata, moodycamel::ConcurrentQueue<struct sample>& sample_q, size_t page_size){
     uint64_t data_size = page_size * 8;
     uint64_t head = metadata->data_head;
     std::atomic_thread_fence(std::memory_order_acquire);
     uint64_t tail = metadata->data_tail;
+
+    if (head - tail > data_size) {
+        // Overrun occurred
+        fprintf(stderr, "perf buffer overrun: lost samples\n");
+    }
+
     char *data = ((char*)metadata) + page_size;
     bool drained_one = false;
     while (tail < head) {
@@ -93,7 +105,8 @@ static bool process_samples(perf_event_mmap_page* metadata, std::unordered_map<u
         }
         if (event_hdr->type == PERF_RECORD_SAMPLE) {
             uint64_t* sample_data = (uint64_t*)((char*)event_hdr + sizeof(perf_event_header));
-            samples[sample_data[1]][sample_data[0]]++;
+            sample sam = {sample_data[1], sample_data[0]};
+            sample_q.enqueue(sam);
             drained_one = true;
         }
         tail += event_hdr->size;
@@ -103,20 +116,28 @@ static bool process_samples(perf_event_mmap_page* metadata, std::unordered_map<u
     return drained_one;
 }
 
-static void drain_samples_loop(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& sample_mutex) {
+static void drain_samples_loop(std::unordered_map<pid_t, struct perf_event_mmap_page*>& maps, moodycamel::ConcurrentQueue<struct sample>& sample_q, size_t page_size, std::mutex& map_mutex) {
     bool drained_one = true;
-    while(!stop_draining || drained_one) {
-        sample_mutex.lock();
+    while(!stop_threading || drained_one) {
+        map_mutex.lock();
         drained_one = false;
-        for(int i = 0; i < maps.size(); i++){
-            drained_one = process_samples(maps[i], samples, page_size) || drained_one;
+        for(auto entry : maps){
+            drained_one = drain_samples(entry.second, sample_q, page_size) || drained_one;
         }
-        sample_mutex.unlock();
+        map_mutex.unlock();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
-
-static struct perf_event_mmap_page* track_thread(unsigned long tid, struct perf_event_attr& pe) {
+// Function to drain and process samples produces by drain_samples_loop
+static void process_samples_loop(moodycamel::ConcurrentQueue<struct sample>& sample_q, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples) {
+    struct sample s;
+    bool found = sample_q.try_dequeue(s);
+    while(!stop_threading || found) {
+        samples[s.address][s.ip]++;
+        found = sample_q.try_dequeue(s);
+    }
+}
+static struct perf_event_mmap_page* track_thread(pid_t tid, struct perf_event_attr& pe) {
     int fd = perf_event_open(&pe, tid, -1, -1, 0);    
     if (fd == -1) {
         perror("thread perf_event_open");
@@ -207,7 +228,6 @@ int main(int argc, char **argv) {
     pe.exclude_kernel = 1;
     pe.exclude_hv = 1;
     pe.precise_ip = 2;
-    
     int fd = perf_event_open(&pe, child, -1, -1, 0);    
     if (fd == -1) {
         perror("perf_event_open");
@@ -230,13 +250,17 @@ int main(int argc, char **argv) {
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     
-    std::mutex sample_mutex;
-    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> samples(1); 
-    std::vector<struct perf_event_mmap_page*> maps = {metadata};
+    // Stores samples waiting to be processed
+    moodycamel::ConcurrentQueue<struct sample> sample_q;
+    // Used to lock the maps
+    std::mutex map_mutex;
+    // address (ip, count)
+    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> samples; 
+    std::unordered_map<pid_t, struct perf_event_mmap_page*> maps = {{child, metadata}};
     int status = 0;
     // Drain samples in maps in another thread
-    std::thread process_thread(drain_samples_loop, std::ref(samples), std::ref(maps), page_size, std::ref(sample_mutex));
-    
+    std::thread drain_sample_thread(drain_samples_loop, std::ref(maps), std::ref(sample_q), page_size, std::ref(map_mutex));
+    std::thread process_sample_thread(process_samples_loop, std::ref(sample_q), std::ref(samples));
     while (true) {
         // Look at all threads/children
         pid_t r = waitpid(-1, &status, __WALL | WNOHANG);
@@ -253,12 +277,22 @@ int main(int argc, char **argv) {
         if (r > 0 && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
             unsigned int event = status >> 16;
             if (event == PTRACE_EVENT_CLONE) {
-                sample_mutex.lock();
-                unsigned long new_tid;
+                map_mutex.lock();
+                pid_t new_tid;
                 ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
                 struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
-                maps.push_back(mmap);
-                sample_mutex.unlock();
+                maps[new_tid] = mmap;
+                map_mutex.unlock();
+            }
+            else if (event == PTRACE_EVENT_EXIT) {
+                // thread is about to exit
+                unsigned long code;
+                ptrace(PTRACE_GETEVENTMSG, r, 0, &code);
+
+                // flush its samples one last time
+                drain_samples(maps[r], sample_q, page_size);
+                // Free resources
+                munmap(maps[r], mmap_size);
             }
         }
         if (r > 0) {
@@ -269,8 +303,9 @@ int main(int argc, char **argv) {
     }
     
     // Tell the draining thread to finish draining and return
-    stop_draining = true;
-    process_thread.join();
+    stop_threading = true;
+    drain_sample_thread.join();
+    process_sample_thread.join();
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
 
