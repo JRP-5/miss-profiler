@@ -81,14 +81,14 @@ static void wait_exec_stop(pid_t pid) {
 static bool process_samples(perf_event_mmap_page* metadata, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, size_t page_size ){
     uint64_t data_size = page_size * 8;
     uint64_t head = metadata->data_head;
-        std::atomic_thread_fence(std::memory_order_acquire);
+    std::atomic_thread_fence(std::memory_order_acquire);
     uint64_t tail = metadata->data_tail;
     char *data = ((char*)metadata) + page_size;
     bool drained_one = false;
     while (tail < head) {
         perf_event_header *event_hdr = (perf_event_header *)(data + (tail % data_size));
         if (event_hdr->size == 0 || event_hdr->size > data_size) {
-            // corrupted or not ye twritten record
+            // corrupted or not yet written record
             break;
         }
         if (event_hdr->type == PERF_RECORD_SAMPLE) {
@@ -103,13 +103,13 @@ static bool process_samples(perf_event_mmap_page* metadata, std::unordered_map<u
     return drained_one;
 }
 
-static void drain_samples_loop(std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>>& samples, std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& sample_mutex) {
+static void drain_samples_loop(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& sample_mutex) {
     bool drained_one = true;
     while(!stop_draining || drained_one) {
         sample_mutex.lock();
         drained_one = false;
-        for(int i = 0; i < samples.size(); i++){
-            drained_one = process_samples(maps[i], samples[i], page_size) || drained_one;
+        for(int i = 0; i < maps.size(); i++){
+            drained_one = process_samples(maps[i], samples, page_size) || drained_one;
         }
         sample_mutex.unlock();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -136,19 +136,20 @@ static struct perf_event_mmap_page* track_thread(unsigned long tid, struct perf_
     return (perf_event_mmap_page*) mmap_base;
 }
 
-static void print_results(std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>>& samples, Symboliser& symboliser) {
+static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, Symboliser& symboliser) {
     // addr, (ip, count)
-    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> merged;
-    for(auto sample :samples) {
-        for(auto inner_map : sample) {
-            for(auto entry : inner_map.second) {
-                merged[inner_map.first][entry.first] += entry.second;
-            }
-        }
-    }
+    // std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> merged;
+    // for(auto sample :samples) {
+    //     for(auto inner_map : sample) {
+    //         for(auto entry : inner_map.second) {
+    //             merged[inner_map.first][entry.first] += entry.second;
+    //         }
+    //     }
+    // }
+
     // Addr, total count, (ip, count)
     std::vector<std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>>> addr_counts;
-    for(auto inner_map : merged){
+    for(auto inner_map : samples){
         std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> output = {inner_map.first, 0, {}};
         for(auto entry : inner_map.second){
             std::get<1>(output) += entry.second;
@@ -230,7 +231,7 @@ int main(int argc, char **argv) {
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     
     std::mutex sample_mutex;
-    std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>> samples(1); 
+    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> samples(1); 
     std::vector<struct perf_event_mmap_page*> maps = {metadata};
     int status = 0;
     // Drain samples in maps in another thread
@@ -257,7 +258,6 @@ int main(int argc, char **argv) {
                 ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
                 struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
                 maps.push_back(mmap);
-                samples.push_back({});
                 sample_mutex.unlock();
             }
         }
