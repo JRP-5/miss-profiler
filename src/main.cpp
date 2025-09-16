@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <atomic>
+#include <mutex>
 #include <unordered_map>
 #include <err.h>
 #include <elfutils/libdwfl.h>
@@ -25,6 +27,8 @@
 #include <map>
 
 #include "symboliser.h"
+
+std::atomic<bool> stop_draining{false};
 
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
                              int cpu, int group_fd, unsigned long flags) {
@@ -74,22 +78,42 @@ static void wait_exec_stop(pid_t pid) {
     }    
 }
 
-static void process_samples(perf_event_mmap_page* metadata, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, size_t page_size ){
+static bool process_samples(perf_event_mmap_page* metadata, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, size_t page_size ){
     uint64_t data_size = page_size * 8;
     uint64_t head = metadata->data_head;
+        std::atomic_thread_fence(std::memory_order_acquire);
     uint64_t tail = metadata->data_tail;
     char *data = ((char*)metadata) + page_size;
-    
+    bool drained_one = false;
     while (tail < head) {
         perf_event_header *event_hdr = (perf_event_header *)(data + (tail % data_size));
+        if (event_hdr->size == 0 || event_hdr->size > data_size) {
+            // corrupted or not ye twritten record
+            break;
+        }
         if (event_hdr->type == PERF_RECORD_SAMPLE) {
             uint64_t* sample_data = (uint64_t*)((char*)event_hdr + sizeof(perf_event_header));
             samples[sample_data[1]][sample_data[0]]++;
+            drained_one = true;
         }
         tail += event_hdr->size;
     }
     metadata->data_tail = tail;
 
+    return drained_one;
+}
+
+static void drain_samples_loop(std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>>& samples, std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& sample_mutex) {
+    bool drained_one = true;
+    while(!stop_draining || drained_one) {
+        sample_mutex.lock();
+        drained_one = false;
+        for(int i = 0; i < samples.size(); i++){
+            drained_one = process_samples(maps[i], samples[i], page_size) || drained_one;
+        }
+        sample_mutex.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
 static struct perf_event_mmap_page* track_thread(unsigned long tid, struct perf_event_attr& pe) {
@@ -111,16 +135,7 @@ static struct perf_event_mmap_page* track_thread(unsigned long tid, struct perf_
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     return (perf_event_mmap_page*) mmap_base;
 }
-static int module_callback(Dwfl_Module* m, void**, const char* name,
-                           Dwarf_Addr low, void* ) {
-    Dwarf_Addr start = 0;
-    const char* path = dwfl_module_info(m, nullptr, &start, nullptr,
-                                        nullptr, nullptr, nullptr, nullptr);
-    std::cerr << "[DWFL] " << (name ? name : "(anon)") << " -> "
-              << (path ? path : "(no-path)")
-              << " @ 0x" << std::hex << start << std::dec << "\n";
-    return DWARF_CB_OK;
-}
+
 static void print_results(std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>>& samples, Symboliser& symboliser) {
     // addr, (ip, count)
     std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> merged;
@@ -214,16 +229,14 @@ int main(int argc, char **argv) {
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     
-    
+    std::mutex sample_mutex;
     std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>> samples(1); 
     std::vector<struct perf_event_mmap_page*> maps = {metadata};
     int status = 0;
+    // Drain samples in maps in another thread
+    std::thread process_thread(drain_samples_loop, std::ref(samples), std::ref(maps), page_size, std::ref(sample_mutex));
     
     while (true) {
-        // poll-less periodic drain to keep buffer from overflowing but minimal work
-        for(int i = 0; i < samples.size(); i++){
-            process_samples(maps[i], samples[i], page_size);
-        }
         // Look at all threads/children
         pid_t r = waitpid(-1, &status, __WALL | WNOHANG);
         if (r == -1) {
@@ -239,17 +252,25 @@ int main(int argc, char **argv) {
         if (r > 0 && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
             unsigned int event = status >> 16;
             if (event == PTRACE_EVENT_CLONE) {
+                sample_mutex.lock();
                 unsigned long new_tid;
                 ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
                 struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
                 maps.push_back(mmap);
                 samples.push_back({});
+                sample_mutex.unlock();
             }
         }
-        ptrace(PTRACE_CONT, r, 0, 0);
+        if (r > 0) {
+            ptrace(PTRACE_CONT, r, 0, 0);
+        }
+        
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     
+    // Tell the draining thread to finish draining and return
+    stop_draining = true;
+    process_thread.join();
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
 
