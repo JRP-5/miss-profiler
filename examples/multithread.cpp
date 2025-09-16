@@ -38,7 +38,7 @@ int main() {
     std::thread th(spawn_threads);
     th.join();
     // spawn_threads();
-    std::cout << "Final counter value: " << counter.load() << "\n";
+    // std::cout << "Final counter value: " << counter.load() << "\n";
 
     return 0;
 }

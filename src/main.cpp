@@ -133,7 +133,9 @@ static void process_samples_loop(moodycamel::ConcurrentQueue<struct sample>& sam
     struct sample s;
     bool found = sample_q.try_dequeue(s);
     while(!stop_threading || found) {
-        samples[s.address][s.ip]++;
+        if(found){
+            samples[s.address][s.ip]++;
+        }
         found = sample_q.try_dequeue(s);
     }
 }
