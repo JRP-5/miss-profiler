@@ -24,6 +24,8 @@ add_executable(
     src/main.cpp
     src/symboliser.cpp
     src/symboliser.h
+    src/sample.cpp
+    src/sample.hpp
 )
 add_executable(
     vector examples/vector.cpp

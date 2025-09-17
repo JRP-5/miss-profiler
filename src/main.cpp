@@ -10,12 +10,10 @@
 #include <vector>
 #include <cstdint>
 #include <thread>
-#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <atomic>
 #include <mutex>
-#include "concurrentqueue.h"
 #include <unordered_map>
 #include <err.h>
 #include <elfutils/libdwfl.h>
@@ -25,9 +23,8 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <sched.h>
-#include <map>
 
-#include "symboliser.h"
+#include "sample.hpp"
 
 std::atomic<bool> stop_threading{false};
 
@@ -84,61 +81,6 @@ static void wait_exec_stop(pid_t pid) {
     }    
 }
 
-static bool drain_samples(perf_event_mmap_page* metadata, moodycamel::ConcurrentQueue<struct sample>& sample_q, size_t page_size){
-    uint64_t data_size = page_size * 8;
-    uint64_t head = metadata->data_head;
-    std::atomic_thread_fence(std::memory_order_acquire);
-    uint64_t tail = metadata->data_tail;
-
-    if (head - tail > data_size) {
-        // Overrun occurred
-        fprintf(stderr, "perf buffer overrun: lost samples\n");
-    }
-
-    char *data = ((char*)metadata) + page_size;
-    bool drained_one = false;
-    while (tail < head) {
-        perf_event_header *event_hdr = (perf_event_header *)(data + (tail % data_size));
-        if (event_hdr->size == 0 || event_hdr->size > data_size) {
-            // corrupted or not yet written record
-            break;
-        }
-        if (event_hdr->type == PERF_RECORD_SAMPLE) {
-            uint64_t* sample_data = (uint64_t*)((char*)event_hdr + sizeof(perf_event_header));
-            sample sam = {sample_data[1], sample_data[0]};
-            sample_q.enqueue(sam);
-            drained_one = true;
-        }
-        tail += event_hdr->size;
-    }
-    metadata->data_tail = tail;
-
-    return drained_one;
-}
-
-static void drain_samples_loop(std::unordered_map<pid_t, struct perf_event_mmap_page*>& maps, moodycamel::ConcurrentQueue<struct sample>& sample_q, size_t page_size, std::mutex& map_mutex) {
-    bool drained_one = true;
-    while(!stop_threading || drained_one) {
-        map_mutex.lock();
-        drained_one = false;
-        for(auto entry : maps){
-            drained_one = drain_samples(entry.second, sample_q, page_size) || drained_one;
-        }
-        map_mutex.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-}
-// Function to drain and process samples produces by drain_samples_loop
-static void process_samples_loop(moodycamel::ConcurrentQueue<struct sample>& sample_q, std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples) {
-    struct sample s;
-    bool found = sample_q.try_dequeue(s);
-    while(!stop_threading || found) {
-        if(found){
-            samples[s.address][s.ip]++;
-        }
-        found = sample_q.try_dequeue(s);
-    }
-}
 static struct perf_event_mmap_page* track_thread(pid_t tid, struct perf_event_attr& pe) {
     int fd = perf_event_open(&pe, tid, -1, -1, 0);    
     if (fd == -1) {
@@ -159,55 +101,17 @@ static struct perf_event_mmap_page* track_thread(pid_t tid, struct perf_event_at
     return (perf_event_mmap_page*) mmap_base;
 }
 
-static void print_results(std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>>& samples, Symboliser& symboliser) {
-    // addr, (ip, count)
-    // std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> merged;
-    // for(auto sample :samples) {
-    //     for(auto inner_map : sample) {
-    //         for(auto entry : inner_map.second) {
-    //             merged[inner_map.first][entry.first] += entry.second;
-    //         }
-    //     }
-    // }
+enum Event {
+    CACHE_MISS,
+    BRANCH_MISS
+};
 
-    // Addr, total count, (ip, count)
-    std::vector<std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>>> addr_counts;
-    for(auto inner_map : samples){
-        std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> output = {inner_map.first, 0, {}};
-        for(auto entry : inner_map.second){
-            std::get<1>(output) += entry.second;
-            std::get<2>(output).push_back(std::make_pair(entry.first, entry.second));
-        }
-        std::sort(std::get<2>(output).begin(), std::get<2>(output).end(), [](std::pair<uint64_t, uint64_t> a, std::pair<uint64_t, uint64_t> b) {
-            return a.second > b.second;
-        });
-        addr_counts.push_back(output);
-    }
-    std::sort(addr_counts.begin(), addr_counts.end(), [](std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> a, std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> b) {
-        return std::get<1>(a) > std::get<1>(b);
-    });
-    std::cout << "Address\t\t Instruction\t\t Cache Misses\t File\n";
-    std::cout << "---------------------------------------------------------------\n";
-    for(auto& addr_entry: addr_counts){
-        // Ignore smaller ones
-        if(std::get<1>(addr_entry) <= 1) continue;
-        std::cout << std::left << std::setw(41) << std::hex << std::showbase <<  std::get<0>(addr_entry)  << std::left 
-        << std::setw(29) << std::dec << std::get<1>(addr_entry) << "\n";
-        // std::cout << "Address 0x" << std::hex << std::get<0>(addr_entry) << " total " << std::dec <<  << " misses\n";
-        for(auto& ip_entry: std::get<2>(addr_entry)){
-            Symbol symbol = symboliser.symbol(ip_entry.first);
-            std::cout << std::left << std::setw(17) << "" << std::left << std::setw(24) << std::hex
-             << std::showbase << ip_entry.first << std::left << std::setw(16) << std::dec 
-             << ip_entry.second << std::setw(16)  << symbol.file << ":" << symbol.line << ":" << symbol.column <<  std::endl;
-        }
-        std::cout << std::endl;
-    }
-}
 int main(int argc, char **argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <program> [args...]\n";
         return 1;
     }
+    Event choice = CACHE_MISS; 
     pid_t child = fork();
     if (child == 0) {
         // Child process: execute the target
@@ -223,13 +127,21 @@ int main(int argc, char **argv) {
     memset(&pe, 0, sizeof(pe));
     pe.type = PERF_TYPE_HW_CACHE;
     pe.size = sizeof(pe);
-    pe.config = PERF_COUNT_HW_CACHE_MISSES;
     pe.sample_period = 1000; // adjust for sampling rate
-    pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
     pe.disabled = 1;
     pe.exclude_kernel = 1;
     pe.exclude_hv = 1;
     pe.precise_ip = 2;
+    switch(choice) {
+        case CACHE_MISS:
+            pe.config = PERF_COUNT_HW_CACHE_MISSES;
+            pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
+            break;
+        case BRANCH_MISS:
+            pe.config = PERF_COUNT_HW_BRANCH_MISSES;
+            pe.sample_type = PERF_SAMPLE_IP;
+            break;
+    }
     int fd = perf_event_open(&pe, child, -1, -1, 0);    
     if (fd == -1) {
         perror("perf_event_open");
@@ -238,7 +150,6 @@ int main(int argc, char **argv) {
 
     size_t page_size = sysconf(_SC_PAGESIZE);
     size_t mmap_size = (1 + (1 << 8)) * page_size;
-    // TODO, does this run out of space?
     void *mmap_base = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (mmap_base == MAP_FAILED) {
         perror("mmap");
@@ -252,17 +163,29 @@ int main(int argc, char **argv) {
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     
-    // Stores samples waiting to be processed
-    moodycamel::ConcurrentQueue<struct sample> sample_q;
     // Used to lock the maps
     std::mutex map_mutex;
-    // address (ip, count)
-    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> samples; 
+    std::unique_ptr<SampleStore> sample_store;
+    switch(choice) {
+        case CACHE_MISS:
+            sample_store = std::make_unique<CacheMissStore>();
+            break;
+        case BRANCH_MISS:
+            sample_store = std::make_unique<BranchMissStore>();
+            break;
+    }
     std::unordered_map<pid_t, struct perf_event_mmap_page*> maps = {{child, metadata}};
+    
+    // Drain samples in maps in another thread    
+    std::thread drain_sample_thread([&]{
+        sample_store->drain_samples_loop(maps, page_size, map_mutex, stop_threading);
+    });
+
+    std::thread process_sample_thread([&]{
+        sample_store->process_samples_loop(stop_threading);
+    });
+    
     int status = 0;
-    // Drain samples in maps in another thread
-    std::thread drain_sample_thread(drain_samples_loop, std::ref(maps), std::ref(sample_q), page_size, std::ref(map_mutex));
-    std::thread process_sample_thread(process_samples_loop, std::ref(sample_q), std::ref(samples));
     while (true) {
         // Look at all threads/children
         pid_t r = waitpid(-1, &status, __WALL | WNOHANG);
@@ -292,7 +215,7 @@ int main(int argc, char **argv) {
                 ptrace(PTRACE_GETEVENTMSG, r, 0, &code);
 
                 // flush its samples one last time
-                drain_samples(maps[r], sample_q, page_size);
+                sample_store->drain_samples(maps[r], page_size);
                 // Free resources
                 munmap(maps[r], mmap_size);
             }
@@ -312,9 +235,8 @@ int main(int argc, char **argv) {
     close(fd);
 
     std::cout << "Collection complete\n" << std::endl;
-    print_results(samples, symboliser);
+    sample_store->print_results(symboliser);
     
-    std::cout << samples.size() << std::endl;
     std::cout << "Profiling complete.\n";
     return 0;
 }
