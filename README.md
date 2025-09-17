@@ -7,4 +7,4 @@ make
 ```
 Some examples are available in `examples`
 
-Usage: `./bin/main [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n`
+Usage: `./bin/main [-e CACHE_MISS | BRANCH_MISS] <program> [args...]`
