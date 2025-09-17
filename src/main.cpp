@@ -108,14 +108,36 @@ enum Event {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <program> [args...]\n";
+        std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
         return 1;
     }
     Event choice = CACHE_MISS; 
+    int i = 1;
+    while(i < argc-1){
+        if(strcmp(argv[i],"-event") == 0 || strcmp(argv[i],"-e") == 0){
+            if(strcmp(argv[i+1], "CACHE_MISS") == 0) {
+                choice = CACHE_MISS;
+            }
+            else if(strcmp(argv[i+1], "BRANCH_MISS") == 0) {
+                choice = BRANCH_MISS;
+            }
+            else {
+                std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
+                return 1;
+            }
+            i++;
+        }
+        else {
+            std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
+            return 1;
+        }
+        i++;
+    }
+        
     pid_t child = fork();
     if (child == 0) {
         // Child process: execute the target
-        execvp(argv[1], &argv[1]);
+        execvp(argv[argc-1], &argv[argc-1]);
         perror("execvp failed");
         _exit(1);
     }
@@ -125,7 +147,7 @@ int main(int argc, char **argv) {
     ptrace(PTRACE_CONT, child, 0, 0);  
     struct perf_event_attr pe{};
     memset(&pe, 0, sizeof(pe));
-    pe.type = PERF_TYPE_HW_CACHE;
+    
     pe.size = sizeof(pe);
     pe.sample_period = 1000; // adjust for sampling rate
     pe.disabled = 1;
@@ -134,10 +156,12 @@ int main(int argc, char **argv) {
     pe.precise_ip = 2;
     switch(choice) {
         case CACHE_MISS:
+            pe.type = PERF_TYPE_HW_CACHE;
             pe.config = PERF_COUNT_HW_CACHE_MISSES;
             pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
             break;
         case BRANCH_MISS:
+            pe.type = PERF_TYPE_HARDWARE;
             pe.config = PERF_COUNT_HW_BRANCH_MISSES;
             pe.sample_type = PERF_SAMPLE_IP;
             break;

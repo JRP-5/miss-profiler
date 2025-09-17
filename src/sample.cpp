@@ -33,7 +33,6 @@ void CacheMissStore::print_results(Symboliser& symboliser) const {
         if(std::get<1>(addr_entry) <= 1) continue;
         std::cout << std::left << std::setw(41) << std::hex << std::showbase <<  std::get<0>(addr_entry)  << std::left 
         << std::setw(29) << std::dec << std::get<1>(addr_entry) << "\n";
-        // std::cout << "Address 0x" << std::hex << std::get<0>(addr_entry) << " total " << std::dec <<  << " misses\n";
         for(auto& ip_entry: std::get<2>(addr_entry)){
             Symbol symbol = symboliser.symbol(ip_entry.first);
             std::cout << std::left << std::setw(17) << "" << std::left << std::setw(24) << std::hex
@@ -51,8 +50,21 @@ void CacheMissStore::queueSamples(perf_event_header *event_hdr) {
 }
 
 void BranchMissStore::print_results(Symboliser& symboliser) const {
-    
-    return;
+    // ip, count
+    std::vector<std::pair<uint64_t, uint64_t>> ip_counts;
+    for(auto& entry : data){
+        ip_counts.push_back({entry.first, entry.second});
+    }
+    std::sort(ip_counts.begin(), ip_counts.end(), [](std::pair<uint64_t, uint64_t> a, std::pair<uint64_t, uint64_t> b) {
+        return a.second > b.second;
+    });
+    std::cout << "Instruction\t\t Branch Misses\t\t File\n";
+    std::cout << "---------------------------------------------------------------\n";
+    for(auto& entry: ip_counts){
+        Symbol symbol = symboliser.symbol(entry.first);
+        std::cout << std::left << std::setw(25) << std::hex << std::showbase <<  entry.first << std::left 
+        << std::setw(24) << std::dec << entry.second << symbol.file << ":" << symbol.line << ":" << symbol.column <<  std::endl << "\n";
+    }
 }
 
 void BranchMissStore::queueSamples(perf_event_header *event_hdr) {
