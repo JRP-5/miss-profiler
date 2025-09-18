@@ -4,6 +4,7 @@
 #include <iostream>
 #include <algorithm>
 #include <iomanip>
+#include <cstring>
 #include <linux/perf_event.h>
 #include "concurrentqueue.h"
 
@@ -68,7 +69,10 @@ void BranchMissStore::print_results(Symboliser& symboliser) const {
 }
 
 void BranchMissStore::queueSamples(perf_event_header *event_hdr) {
-    BranchMissSample sam = {(uint64_t)((char*)event_hdr + sizeof(perf_event_header))};
+    uint64_t ip = 0;
+    std::memcpy(&ip, (char*)event_hdr + sizeof(perf_event_header), sizeof(ip));
+
+    BranchMissSample sam{ ip };
     sample_q.enqueue(sam);
 }
 
