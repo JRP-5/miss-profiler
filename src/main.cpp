@@ -260,7 +260,7 @@ int main(int argc, char **argv) {
 
     std::cout << "Collection complete\n" << std::endl;
     sample_store->print_results(symboliser);
-    
+
     std::cout << "Profiling complete.\n";
     return 0;
 }

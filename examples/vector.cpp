@@ -4,10 +4,6 @@
 #include <iostream>
 #include <cstring>
 
-void myfunc() {
-    printf("myfunc address: %p\n", (void*)myfunc);
-}
-
 int main() {
     std::vector<double*> allocations;
     for (int i = 0; i < 100; ++i) {
@@ -32,8 +28,6 @@ int main() {
     for (int i = 0; i < 1000; ++i)
         v[i] = i;
 
-    std::cout << "Sum = " << v[10] + v[20] << std::endl;
-    myfunc();
     // std::this_thread::sleep_for(std::chrono::milliseconds(4000));
     return 0;
 }

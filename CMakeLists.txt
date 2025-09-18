@@ -33,6 +33,12 @@ add_executable(
 add_executable(
     multithread examples/multithread.cpp
 )
+add_executable(
+    branch_random examples/branch_random.cpp
+)
+add_executable(
+    multithread_mat_mult examples/multithread_mat_mult.cpp
+)
 
 target_include_directories(main PRIVATE
     ${concurrentqueue_SOURCE_DIR}

@@ -1,6 +1,7 @@
 #include <unordered_map>
 #include <cstdint>
-
+#include <atomic>
+#include <mutex>
 #include "symboliser.h"
 #include "concurrentqueue.h"
 
@@ -12,7 +13,7 @@ struct BranchMissSample {
 };
 
 struct SampleStore {
-    // virtual ~SampleStore() = default;
+    virtual ~SampleStore() = default;
     virtual void print_results(Symboliser& symboliser) const = 0;
     bool drain_samples(perf_event_mmap_page* metadata, size_t page_size);
     void drain_samples_loop(std::unordered_map<pid_t, struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading);

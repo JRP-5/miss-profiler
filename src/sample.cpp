@@ -78,10 +78,10 @@ bool SampleStore::drain_samples(perf_event_mmap_page* metadata, size_t page_size
     std::atomic_thread_fence(std::memory_order_acquire);
     uint64_t tail = metadata->data_tail;
 
-    if (head - tail > data_size) {
-        // Overrun occurred
-        fprintf(stderr, "perf buffer overrun: lost samples\n");
-    }
+    // if (head - tail > data_size) {
+    //     // Overrun occurred
+    //     fprintf(stderr, "perf buffer overrun: lost samples\n");
+    // }
 
     char *data = ((char*)metadata) + page_size;
     bool drained_one = false;
@@ -111,7 +111,6 @@ void SampleStore::drain_samples_loop(std::unordered_map<pid_t, struct perf_event
             drained_one = drain_samples(entry.second, page_size) || drained_one;
         }
         map_mutex.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
