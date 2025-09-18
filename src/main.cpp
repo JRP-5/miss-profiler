@@ -105,17 +105,24 @@ enum Event {
     CACHE_MISS,
     BRANCH_MISS
 };
-
+constexpr static const char* help_string = " [OPTION] <program> [args ..]\n\n"
+"The following options are available\n"
+"\t-e, --event           CACHE_MISS, BRANCH_MISS\n"
+"\t-o  --output          Name of the output file\n";
 int main(int argc, char **argv) {
     std::string out_file = "miss-prof.data";
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
+        std::cerr << "Usage: " << argv[0] << help_string;
         return 1;
     }
     Event choice = CACHE_MISS; 
     int i = 1;
     while(i < argc-1){
         if(strcmp(argv[i],"-event") == 0 || strcmp(argv[i],"-e") == 0){
+            if(i == argc-1) {
+                std::cerr << "Usage: " << argv[0] << help_string;
+                return 1;
+            }
             if(strcmp(argv[i+1], "CACHE_MISS") == 0) {
                 choice = CACHE_MISS;
             }
@@ -123,17 +130,21 @@ int main(int argc, char **argv) {
                 choice = BRANCH_MISS;
             }
             else {
-                std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
+                std::cerr << "Usage: " << argv[0] << help_string;
                 return 1;
             }
             i++;
         }
-        else if(strcmp(argv[i],"-output") == 0 || strcmp(argv[i],"-o") == 0){
+        else if(strcmp(argv[i],"--output") == 0 || strcmp(argv[i],"-o") == 0){
+            if(i == argc-1) {
+                std::cerr << "Usage: " << argv[0] << help_string;
+                return 1;
+            }
             out_file = argv[i+1];
             i++;
         }
         else {
-            std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
+            std::cerr << "Usage: " << argv[0] << help_string;
             return 1;
         }
         i++;
