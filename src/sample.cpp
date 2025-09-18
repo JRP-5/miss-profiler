@@ -2,6 +2,7 @@
 #include <tuple>
 #include <ios>
 #include <iostream>
+#include <fstream>  
 #include <algorithm>
 #include <iomanip>
 #include <cstring>
@@ -10,7 +11,7 @@
 
 #include "sample.hpp"
  
-void CacheMissStore::print_results(Symboliser& symboliser) const {
+void CacheMissStore::print_results(Symboliser& symboliser, std::string file_name) const {
     // Addr, total count, (ip, count)
     std::vector<std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>>> addr_counts;
     for(auto inner_map : data){
@@ -27,21 +28,24 @@ void CacheMissStore::print_results(Symboliser& symboliser) const {
     std::sort(addr_counts.begin(), addr_counts.end(), [](std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> a, std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>> b) {
         return std::get<1>(a) > std::get<1>(b);
     });
-    std::cout << "Address\t\t Instruction\t\t Cache Misses\t File\n";
-    std::cout << "---------------------------------------------------------------\n";
+    std::ofstream out_file;
+    out_file.open(file_name);
+    out_file << "Address\t\t\t Instruction\t\t\t Cache Misses\t File\n";
+    out_file << "---------------------------------------------------------------\n";
     for(auto& addr_entry: addr_counts){
         // Ignore smaller ones
         if(std::get<1>(addr_entry) <= 1) continue;
-        std::cout << std::left << std::setw(41) << std::hex << std::showbase <<  std::get<0>(addr_entry)  << std::left 
+        out_file << std::left << std::setw(41) << std::hex << std::showbase <<  std::get<0>(addr_entry)  << std::left 
         << std::setw(29) << std::dec << std::get<1>(addr_entry) << "\n";
         for(auto& ip_entry: std::get<2>(addr_entry)){
             Symbol symbol = symboliser.symbol(ip_entry.first);
-            std::cout << std::left << std::setw(17) << "" << std::left << std::setw(24) << std::hex
+            out_file << std::left << std::setw(17) << "" << std::left << std::setw(24) << std::hex
             << std::showbase << ip_entry.first << std::left << std::setw(16) << std::dec 
             << ip_entry.second << std::setw(16)  << symbol.file << ":" << symbol.line << ":" << symbol.column <<  std::endl;
         }
-        std::cout << std::endl;
+        out_file << std::endl;
     }
+    out_file.close();
 }
 
 void CacheMissStore::queueSamples(perf_event_header *event_hdr) {
@@ -50,7 +54,7 @@ void CacheMissStore::queueSamples(perf_event_header *event_hdr) {
     sample_q.enqueue(sam);
 }
 
-void BranchMissStore::print_results(Symboliser& symboliser) const {
+void BranchMissStore::print_results(Symboliser& symboliser, std::string file_name) const {
     // ip, count
     std::vector<std::pair<uint64_t, uint64_t>> ip_counts;
     for(auto& entry : data){
@@ -59,13 +63,16 @@ void BranchMissStore::print_results(Symboliser& symboliser) const {
     std::sort(ip_counts.begin(), ip_counts.end(), [](std::pair<uint64_t, uint64_t> a, std::pair<uint64_t, uint64_t> b) {
         return a.second > b.second;
     });
-    std::cout << "Instruction\t\t Branch Misses\t\t File\n";
-    std::cout << "---------------------------------------------------------------\n";
+    std::ofstream out_file;
+    out_file.open(file_name);
+    out_file << "Instruction\t\t\t Branch Misses\t\t File\n";
+    out_file << "---------------------------------------------------------------\n";
     for(auto& entry: ip_counts){
         Symbol symbol = symboliser.symbol(entry.first);
-        std::cout << std::left << std::setw(25) << std::hex << std::showbase <<  entry.first << std::left 
+        out_file << std::left << std::setw(25) << std::hex << std::showbase <<  entry.first << std::left 
         << std::setw(24) << std::dec << entry.second << symbol.file << ":" << symbol.line << ":" << symbol.column <<  std::endl << "\n";
     }
+    out_file.close();
 }
 
 void BranchMissStore::queueSamples(perf_event_header *event_hdr) {

@@ -107,6 +107,7 @@ enum Event {
 };
 
 int main(int argc, char **argv) {
+    std::string out_file = "miss-prof.data";
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
         return 1;
@@ -125,6 +126,10 @@ int main(int argc, char **argv) {
                 std::cerr << "Usage: " << argv[0] << " [-e CACHE_MISS | BRANCH_MISS] <program> [args...]\n";
                 return 1;
             }
+            i++;
+        }
+        else if(strcmp(argv[i],"-output") == 0 || strcmp(argv[i],"-o") == 0){
+            out_file = argv[i+1];
             i++;
         }
         else {
@@ -258,9 +263,9 @@ int main(int argc, char **argv) {
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
 
-    std::cout << "Collection complete\n" << std::endl;
-    sample_store->print_results(symboliser);
+    // std::cout << "Collection complete\n" << std::endl;
+    sample_store->print_results(symboliser, out_file);
 
-    std::cout << "Profiling complete.\n";
+    // std::cout << "Profiling complete.\n";
     return 0;
 }
