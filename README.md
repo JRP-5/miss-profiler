@@ -5,6 +5,14 @@ mkdir build && cd build
 cmake ..
 make
 ```
-Some examples are available in `examples`
 
-Usage: `./bin/main [-e CACHE_MISS | BRANCH_MISS] <program> [args...]`
+Usage: 
+```
+./bin/main [OPTION] <program> [args ..]
+
+The following options are available
+    -e, --event           CACHE_MISS, BRANCH_MISS
+    -o  --output          Name of the output file
+```
+
+Some example programs are available in `examples`
