@@ -144,16 +144,15 @@ int main(int argc, char **argv) {
             i++;
         }
         else {
-            std::cerr << "Usage: " << argv[0] << help_string;
-            return 1;
+            break;
         }
         i++;
     }
-        
+    char **target_argv = &argv[i];
     pid_t child = fork();
     if (child == 0) {
         // Child process: execute the target
-        execvp(argv[argc-1], &argv[argc-1]);
+        execvp(target_argv[0], target_argv);
         perror("execvp failed");
         _exit(1);
     }

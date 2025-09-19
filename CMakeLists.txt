@@ -39,6 +39,9 @@ add_executable(
 add_executable(
     multithread_mat_mult examples/multithread_mat_mult.cpp
 )
+add_executable(
+    montecarlo_pi examples/montecarlo_pi.cpp
+)
 
 target_include_directories(main PRIVATE
     ${concurrentqueue_SOURCE_DIR}
