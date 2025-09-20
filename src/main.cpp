@@ -202,8 +202,7 @@ int main(int argc, char **argv) {
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
         err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
     
-    // Used to lock the maps
-    std::mutex map_mutex;
+    
     std::unique_ptr<SampleStore> sample_store;
     switch(choice) {
         case CACHE_MISS:
@@ -213,11 +212,14 @@ int main(int argc, char **argv) {
             sample_store = std::make_unique<BranchMissStore>();
             break;
     }
-    std::unordered_map<pid_t, struct perf_event_mmap_page*> maps = {{child, metadata}};
+    std::unordered_map<pid_t, struct perf_event_mmap_page*> thread_maps = {{child, metadata}};
+    // Used to lock the maps
+    std::mutex map_mutex;
+    std::vector<struct perf_event_mmap_page*> maps;
     
-    // Drain samples in maps in another thread    
-    std::thread drain_sample_thread([&]{
-        sample_store->drain_samples_loop(maps, page_size, map_mutex, stop_threading);
+    // Drain samples in maps in another set of threads
+    std::thread drain_sample_pool([&]{
+        sample_store->drain_samples_pool(maps, page_size, map_mutex, stop_threading);
     });
 
     std::thread process_sample_thread([&]{
@@ -241,12 +243,14 @@ int main(int argc, char **argv) {
         if (r > 0 && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
             unsigned int event = status >> 16;
             if (event == PTRACE_EVENT_CLONE) {
-                map_mutex.lock();
                 pid_t new_tid;
                 ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
                 struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
-                maps[new_tid] = mmap;
-                map_mutex.unlock();
+                thread_maps[new_tid] = mmap;
+                {
+                    std::lock_guard<std::mutex> lock(map_mutex);
+                    maps.push_back(mmap);
+                }
             }
             else if (event == PTRACE_EVENT_EXIT) {
                 // thread is about to exit
@@ -262,19 +266,17 @@ int main(int argc, char **argv) {
         if (r > 0) {
             ptrace(PTRACE_CONT, r, 0, 0);
         }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     
     // Tell the draining thread to finish draining and return
     stop_threading = true;
-    drain_sample_thread.join();
+    drain_sample_pool.join();
     process_sample_thread.join();
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
     close(fd);
 
     // std::cout << "Collection complete\n" << std::endl;
-    sample_store->print_results(symboliser, out_file);
+    // sample_store->print_results(symboliser, out_file);
 
     // std::cout << "Profiling complete.\n";
     return 0;

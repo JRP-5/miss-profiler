@@ -112,17 +112,49 @@ bool SampleStore::drain_samples(perf_event_mmap_page* metadata, size_t page_size
 
     return drained_one;
 }
-
-void SampleStore::drain_samples_loop(std::unordered_map<pid_t, struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading) {
+void SampleStore::drain_samples_thread(std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading){
     bool drained_one = true;
-    while(!stop_threading || drained_one) {
-        map_mutex.lock();
+    size_t local_idx = 0;
+    while (!stop_threading || drained_one) {
         drained_one = false;
-        for(auto entry : maps){
-            drained_one = drain_samples(entry.second, page_size) || drained_one;
+        perf_event_mmap_page* buf = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(map_mutex);
+            if (!maps.empty()) {
+                buf = maps[local_idx % maps.size()];
+                local_idx++;
+            }
         }
-        map_mutex.unlock();
+
+        if (buf) {
+            bool got = drain_samples(buf, page_size);
+            drained_one = drained_one || got;
+            if (!got) {
+                // avoid busy spin when no samples
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        } else {
+            // no buffers yet
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
+}
+
+void SampleStore::drain_samples_pool(std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading) {
+    size_t num_workers = std::thread::hardware_concurrency();
+    if (num_workers == 0) num_workers = 4; // fallback
+    
+    // Create and launch our pool of threads
+    std::vector<std::thread> workers;
+    for (size_t i = 0; i < num_workers; i++) {
+        workers.emplace_back([&]{
+            drain_samples_thread(maps, page_size, map_mutex, stop_threading);
+        });
+    }
+    while(!stop_threading){
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    for (auto& t : workers) t.join();
 }
 
 // Drains and process samples produces by drain_samples_loop

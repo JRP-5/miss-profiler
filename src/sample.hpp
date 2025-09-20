@@ -16,7 +16,8 @@ struct SampleStore {
     virtual ~SampleStore() = default;
     virtual void print_results(Symboliser& symboliser, std::string file_name) const = 0;
     bool drain_samples(perf_event_mmap_page* metadata, size_t page_size);
-    void drain_samples_loop(std::unordered_map<pid_t, struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading);
+    void drain_samples_thread(std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading);
+    void drain_samples_pool(std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading); 
     virtual void queueSamples(perf_event_header *event_hdr) = 0;
     virtual void process_samples_loop(std::atomic<bool>& stop_threading) = 0;
 };
