@@ -177,6 +177,7 @@ void SampleStore::drain_samples_thread(std::vector<struct perf_event_mmap_page*>
 
 void SampleStore::drain_samples_pool(std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading) {
     size_t num_workers = std::thread::hardware_concurrency();
+    num_workers = 1;
     if (num_workers == 0) num_workers = 4; // fallback
     
     // Create and launch our pool of threads
@@ -186,9 +187,9 @@ void SampleStore::drain_samples_pool(std::vector<struct perf_event_mmap_page*>& 
             drain_samples_thread(maps, page_size, map_mutex, stop_threading);
         });
     }
-    pid_t r;
     
     while(!stop_threading){
+        pid_t r;
         bool found = thread_q.try_dequeue(r);
         if(found){    
             pid_t new_tid;

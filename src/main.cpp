@@ -144,7 +144,7 @@ int main(int argc, char **argv) {
     memset(&pe, 0, sizeof(pe));
     
     pe.size = sizeof(pe);
-    pe.sample_period = 1000; // adjust for sampling rate
+    pe.sample_period = 10000; // adjust for sampling rate
     pe.disabled = 1;
     pe.exclude_kernel = 1;
     pe.exclude_hv = 1;
@@ -209,14 +209,16 @@ int main(int argc, char **argv) {
     int status = 0;
     while (true) {
         // Look at all threads/children
-        pid_t r = waitpid(-1, &status, __WALL | WNOHANG);
+        pid_t r = waitpid(-1, &status,  __WALL);
         if (r == -1) {
             if (errno == EINTR) continue;
             perror("waitpid");
             break;
         }
-
-        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        else if (r == 0){
+            continue;
+        }
+        else if (WIFEXITED(status) || WIFSIGNALED(status)) {
             continue;
         }
         // If our process has spawned a new thread we should also track it
@@ -237,11 +239,8 @@ int main(int argc, char **argv) {
                 // munmap(maps[r], mmap_size);
             }
         }
-        if (r > 0) {
-            ptrace(PTRACE_CONT, r, 0, 0);
-        }
+        ptrace(PTRACE_CONT, r, 0, 0);
     }
-    
     // Tell the draining thread to finish draining and return
     stop_threading = true;
     drain_sample_pool.join();
