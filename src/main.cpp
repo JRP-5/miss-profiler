@@ -81,26 +81,6 @@ static void wait_exec_stop(pid_t pid) {
     }    
 }
 
-static struct perf_event_mmap_page* track_thread(pid_t tid, struct perf_event_attr& pe) {
-    int fd = perf_event_open(&pe, tid, -1, -1, 0);    
-    if (fd == -1) {
-        perror("thread perf_event_open");
-    }
-    size_t page_size = sysconf(_SC_PAGESIZE);
-    size_t mmap_size = (1 + (1 << 8)) * page_size;
-    // TODO, does this run out of space?
-    void *mmap_base = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (mmap_base == MAP_FAILED) {
-        perror("mmap");
-        close(fd);
-    }
-    if (ioctl(fd, PERF_EVENT_IOC_RESET, 0) == -1)
-        err(EXIT_FAILURE, "PERF_EVENT_IOC_RESET");
-    if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
-        err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
-    return (perf_event_mmap_page*) mmap_base;
-}
-
 enum Event {
     CACHE_MISS,
     BRANCH_MISS
@@ -206,16 +186,16 @@ int main(int argc, char **argv) {
     std::unique_ptr<SampleStore> sample_store;
     switch(choice) {
         case CACHE_MISS:
-            sample_store = std::make_unique<CacheMissStore>();
+            sample_store = std::unique_ptr<CacheMissStore>(new CacheMissStore(pe));
             break;
         case BRANCH_MISS:
-            sample_store = std::make_unique<BranchMissStore>();
+            sample_store = std::unique_ptr<BranchMissStore>(new BranchMissStore(pe));
             break;
     }
     std::unordered_map<pid_t, struct perf_event_mmap_page*> thread_maps = {{child, metadata}};
     // Used to lock the maps
     std::mutex map_mutex;
-    std::vector<struct perf_event_mmap_page*> maps;
+    std::vector<struct perf_event_mmap_page*> maps = {metadata};
     
     // Drain samples in maps in another set of threads
     std::thread drain_sample_pool([&]{
@@ -243,24 +223,18 @@ int main(int argc, char **argv) {
         if (r > 0 && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
             unsigned int event = status >> 16;
             if (event == PTRACE_EVENT_CLONE) {
-                pid_t new_tid;
-                ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
-                struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
-                thread_maps[new_tid] = mmap;
-                {
-                    std::lock_guard<std::mutex> lock(map_mutex);
-                    maps.push_back(mmap);
-                }
+                sample_store->queue_thread(r);
             }
             else if (event == PTRACE_EVENT_EXIT) {
                 // thread is about to exit
                 unsigned long code;
                 ptrace(PTRACE_GETEVENTMSG, r, 0, &code);
-
-                // flush its samples one last time
-                sample_store->drain_samples(maps[r], page_size);
-                // Free resources
-                munmap(maps[r], mmap_size);
+                
+                // TODO
+                // // flush its samples one last time
+                // sample_store->drain_samples(maps[r], page_size);
+                // // Free resources
+                // munmap(maps[r], mmap_size);
             }
         }
         if (r > 0) {
@@ -276,7 +250,7 @@ int main(int argc, char **argv) {
     close(fd);
 
     // std::cout << "Collection complete\n" << std::endl;
-    // sample_store->print_results(symboliser, out_file);
+    sample_store->print_results(symboliser, out_file);
 
     // std::cout << "Profiling complete.\n";
     return 0;

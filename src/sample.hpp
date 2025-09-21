@@ -13,8 +13,12 @@ struct BranchMissSample {
 };
 
 struct SampleStore {
+    moodycamel::ConcurrentQueue<pid_t> thread_q;
+    struct perf_event_attr pe;
+    SampleStore(struct perf_event_attr& pea);
     virtual ~SampleStore() = default;
     virtual void print_results(Symboliser& symboliser, std::string file_name) const = 0;
+    void queue_thread(pid_t r);
     bool drain_samples(perf_event_mmap_page* metadata, size_t page_size);
     void drain_samples_thread(std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading);
     void drain_samples_pool(std::vector<struct perf_event_mmap_page*>& maps, size_t page_size, std::mutex& map_mutex, std::atomic<bool>& stop_threading); 
@@ -22,6 +26,7 @@ struct SampleStore {
     virtual void process_samples_loop(std::atomic<bool>& stop_threading) = 0;
 };
 struct CacheMissStore : SampleStore {
+    using SampleStore::SampleStore;
     // address (ip, count)
     std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> data;
     moodycamel::ConcurrentQueue<struct CacheMissSample> sample_q;
@@ -30,6 +35,7 @@ struct CacheMissStore : SampleStore {
     void process_samples_loop(std::atomic<bool>& stop_threading) override;
 };
 struct BranchMissStore : SampleStore {
+    using SampleStore::SampleStore;
     // ip, count
     std::unordered_map<uint64_t, uint64_t> data;
     moodycamel::ConcurrentQueue<struct BranchMissSample> sample_q;

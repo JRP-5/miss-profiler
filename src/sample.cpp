@@ -7,10 +7,40 @@
 #include <iomanip>
 #include <cstring>
 #include <linux/perf_event.h>
+#include <sys/ptrace.h>
+#include <sys/syscall.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <err.h>
 #include "concurrentqueue.h"
 
 #include "sample.hpp"
- 
+
+static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
+                             int cpu, int group_fd, unsigned long flags) {
+    return syscall(__NR_perf_event_open, hw_event, pid, cpu, group_fd, flags);
+}
+
+static struct perf_event_mmap_page* track_thread(pid_t tid, struct perf_event_attr& pe) {
+    int fd = perf_event_open(&pe, tid, -1, -1, 0);    
+    if (fd == -1) {
+        perror("thread perf_event_open");
+    }
+    size_t page_size = sysconf(_SC_PAGESIZE);
+    size_t mmap_size = (1 + (1 << 8)) * page_size;
+    // TODO, does this run out of space?
+    void *mmap_base = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mmap_base == MAP_FAILED) {
+        perror("mmap");
+        close(fd);
+    }
+    if (ioctl(fd, PERF_EVENT_IOC_RESET, 0) == -1)
+        err(EXIT_FAILURE, "PERF_EVENT_IOC_RESET");
+    if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) == -1)
+        err(EXIT_FAILURE, "PERF_EVENT_IOC_ENABLE");
+    return (perf_event_mmap_page*) mmap_base;
+}
 void CacheMissStore::print_results(Symboliser& symboliser, std::string file_name) const {
     // Addr, total count, (ip, count)
     std::vector<std::tuple<uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>>> addr_counts;
@@ -83,6 +113,11 @@ void BranchMissStore::queueSamples(perf_event_header *event_hdr) {
     sample_q.enqueue(sam);
 }
 
+SampleStore::SampleStore(struct perf_event_attr& pea) : pe(pea) {};
+
+void SampleStore::queue_thread(pid_t r){
+    thread_q.enqueue(r);
+}
 bool SampleStore::drain_samples(perf_event_mmap_page* metadata, size_t page_size){
     uint64_t data_size = page_size * 8;
     uint64_t head = metadata->data_head;
@@ -151,8 +186,20 @@ void SampleStore::drain_samples_pool(std::vector<struct perf_event_mmap_page*>& 
             drain_samples_thread(maps, page_size, map_mutex, stop_threading);
         });
     }
+    pid_t r;
+    
     while(!stop_threading){
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        bool found = thread_q.try_dequeue(r);
+        if(found){    
+            pid_t new_tid;
+            ptrace(PTRACE_GETEVENTMSG, r, 0, &new_tid);
+            struct perf_event_mmap_page* mmap = track_thread(new_tid, pe);
+            {
+                std::lock_guard<std::mutex> lock(map_mutex);
+                maps.push_back(mmap);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     for (auto& t : workers) t.join();
 }
