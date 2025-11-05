@@ -1,3 +1,7 @@
+/*
+Adapted from: How To Write A Memory Profiler, Milian Wolff
+https://github.com/milianw/how-to-write-a-memory-profiler
+*/
 #include <elfutils/libdwfl.h>
 #include <elfutils/libdw.h>
 #include <unistd.h> 

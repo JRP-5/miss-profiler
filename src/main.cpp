@@ -148,11 +148,13 @@ int main(int argc, char **argv) {
     pe.disabled = 1;
     pe.exclude_kernel = 1;
     pe.exclude_hv = 1;
+    // Try to have 0 skid
     pe.precise_ip = 2;
     switch(choice) {
         case CACHE_MISS:
             pe.type = PERF_TYPE_HW_CACHE;
             pe.config = PERF_COUNT_HW_CACHE_MISSES;
+            // Record these bits in a ring buffer
             pe.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_ADDR;
             break;
         case BRANCH_MISS:
@@ -161,6 +163,7 @@ int main(int argc, char **argv) {
             pe.sample_type = PERF_SAMPLE_IP;
             break;
     }
+    // Measure the child on all CPUs
     int fd = perf_event_open(&pe, child, -1, -1, 0);    
     if (fd == -1) {
         perror("perf_event_open");
